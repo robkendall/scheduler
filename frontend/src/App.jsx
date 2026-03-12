@@ -1,0 +1,186 @@
+import { useEffect, useState } from "react";
+import {
+    BrowserRouter,
+    Navigate,
+    Route,
+    Routes,
+    useLocation,
+} from "react-router-dom";
+import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
+
+import { getCurrentUser } from "./api/auth";
+import Navigation from "./components/Navigation";
+import Benevolence from "./pages/Benevolence";
+import RequireAuth from "./components/RequireAuth";
+import Dashboard from "./pages/Dashboard";
+import Information from "./pages/Information";
+import Login from "./pages/Login";
+import Logout from "./pages/Logout";
+import Register from "./pages/Register";
+import Schedule from "./pages/Schedule";
+import UserProfile from "./pages/UserProfile";
+import UsersManagement from "./pages/UsersManagement";
+import Widows from "./pages/Widows";
+import Work from "./pages/Work";
+import "./App.css";
+
+const theme = createTheme({
+    palette: {
+        mode: "light",
+        primary: {
+            main: "#0f766e",
+        },
+        secondary: {
+            main: "#c2410c",
+        },
+        background: {
+            default: "#f4efe6",
+            paper: "#fffaf2",
+        },
+    },
+    typography: {
+        fontFamily: '"Avenir Next", "Segoe UI", sans-serif',
+    },
+    shape: {
+        borderRadius: 18,
+    },
+});
+
+function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
+    const location = useLocation();
+    const isAuthPage = location.pathname === "/login" || location.pathname === "/register";
+
+    const appRoutes = (
+        <Routes>
+            <Route
+                path="/login"
+                element={
+                    user ? <Navigate to="/" replace /> : <Login onAuthenticated={onUserChange} />
+                }
+            />
+            <Route
+                path="/register"
+                element={
+                    user ? <Navigate to="/" replace /> : <Register onAuthenticated={onUserChange} />
+                }
+            />
+            <Route path="/logout" element={<Logout onLoggedOut={onLoggedOut} />} />
+            <Route
+                path="/"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Dashboard user={user} />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/profile"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <UserProfile user={user} />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/widows"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Widows />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/benevolence"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Benevolence />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/work"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Work />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/schedule"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Schedule />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/information"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Information user={user} />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/users"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <UsersManagement />
+                    </RequireAuth>
+                }
+            />
+        </Routes>
+    );
+
+    if (isAuthPage) {
+        return appRoutes;
+    }
+
+    return (
+        <div className="workspace-shell">
+            <Navigation user={user} />
+            <main className="workspace-main">{appRoutes}</main>
+        </div>
+    );
+}
+
+function App() {
+    const [user, setUser] = useState(null);
+    const [authLoading, setAuthLoading] = useState(true);
+
+    useEffect(() => {
+        let active = true;
+
+        getCurrentUser()
+            .then((currentUser) => {
+                if (active) {
+                    setUser(currentUser);
+                }
+            })
+            .finally(() => {
+                if (active) {
+                    setAuthLoading(false);
+                }
+            });
+
+        return () => {
+            active = false;
+        };
+    }, []);
+
+    return (
+        <ThemeProvider theme={theme}>
+            <CssBaseline />
+            <BrowserRouter>
+                <AppRoutes
+                    authLoading={authLoading}
+                    onLoggedOut={() => setUser(null)}
+                    onUserChange={setUser}
+                    user={user}
+                />
+            </BrowserRouter>
+        </ThemeProvider>
+    );
+}
+
+export default App;
