@@ -8,28 +8,22 @@ function UserProfile({ user }) {
     return (
         <PageShell
             eyebrow="Profile"
-            title="Authenticated starter profile"
-            description="This page is intentionally thin. It exists to prove the session and route protection model without carrying devotional-specific business logic."
+            title="Authenticated profile"
+            description="Session-backed profile details for the scheduler app."
         >
             <section className="route-card">
                 <Stack direction="row" spacing={1} sx={{ mb: 2, flexWrap: "wrap" }}>
-                    <Chip label="Session auth enabled" color="primary" />
-                    <Chip label="PostgreSQL store" color="secondary" variant="outlined" />
+                    <Chip label="Session auth" color="primary" />
+                    <Chip label={user?.isAdmin ? "Admin" : "Standard user"} color="secondary" variant="outlined" />
                 </Stack>
                 <Typography variant="body1" sx={{ mb: 1 }}>
-                    Email
+                    Username
                 </Typography>
                 <Typography variant="h5" sx={{ mb: 2 }}>
-                    {user?.email || "Unknown user"}
-                </Typography>
-                <Typography variant="body1" sx={{ mb: 1 }}>
-                    Type
-                </Typography>
-                <Typography variant="h6" sx={{ mb: 2 }}>
-                    {user?.type || "Other"}
+                    {user?.username || "Unknown user"}
                 </Typography>
                 <Typography variant="body2" color="text.secondary">
-                    Register another account or extend the authenticated routes from this trimmed starter.
+                    Use the Auth Users page to modify accounts and privileges.
                 </Typography>
             </section>
         </PageShell>

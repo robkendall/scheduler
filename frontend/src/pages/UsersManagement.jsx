@@ -2,22 +2,20 @@ import { useEffect, useMemo, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
+import Switch from "@mui/material/Switch";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import TableSortLabel from "@mui/material/TableSortLabel";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 
-import { getUsers, updateUser } from "../api/ministry";
+import { createUser, deleteUser, getUsers, updateUser } from "../api/scheduler";
 import PageShell from "../components/PageShell";
-
-const USER_TYPES = ["Deacon", "Pastor", "Yokefellow", "Other"];
+import { formatDisplayDate } from "../utils/date";
 
 function UsersManagement() {
     const [users, setUsers] = useState([]);
@@ -25,12 +23,10 @@ function UsersManagement() {
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
     const [editingId, setEditingId] = useState(null);
-    const [sortBy, setSortBy] = useState("name");
-    const [sortDirection, setSortDirection] = useState("asc");
     const [form, setForm] = useState({
-        email: "",
-        name: "",
-        type: "Other",
+        username: "",
+        password: "",
+        isAdmin: false,
     });
 
     async function loadUsers() {
@@ -51,66 +47,47 @@ function UsersManagement() {
         loadUsers();
     }, []);
 
-    const selectedUser = useMemo(
-        () => users.find((user) => user.id === editingId) || null,
-        [users, editingId],
+    const sortedUsers = useMemo(
+        () => [...users].sort((left, right) => left.username.localeCompare(right.username)),
+        [users],
     );
-
-    const sortedUsers = useMemo(() => {
-        return [...users].sort((left, right) => {
-            const leftValue = String(left[sortBy] || "").toLowerCase();
-            const rightValue = String(right[sortBy] || "").toLowerCase();
-
-            if (leftValue === rightValue) {
-                return 0;
-            }
-
-            const comparison = leftValue.localeCompare(rightValue);
-            return sortDirection === "asc" ? comparison : -comparison;
-        });
-    }, [sortBy, sortDirection, users]);
 
     function beginEdit(user) {
         setEditingId(user.id);
         setForm({
-            email: user.email || "",
-            name: user.name || "",
-            type: user.type || "Other",
+            username: user.username,
+            password: "",
+            isAdmin: Boolean(user.is_admin),
         });
     }
 
     function clearEdit() {
         setEditingId(null);
-        setForm({ email: "", name: "", type: "Other" });
-    }
-
-    function handleSort(column) {
-        if (sortBy === column) {
-            setSortDirection((prev) => (prev === "asc" ? "desc" : "asc"));
-            return;
-        }
-
-        setSortBy(column);
-        setSortDirection("asc");
+        setForm({ username: "", password: "", isAdmin: false });
     }
 
     async function handleSubmit(event) {
         event.preventDefault();
-        if (!editingId) {
-            return;
-        }
-
         setSaving(true);
         setError("");
 
         try {
-            await updateUser(editingId, {
-                email: form.email,
-                name: form.name,
-                type: form.type,
-            });
-            await loadUsers();
+            if (editingId) {
+                await updateUser(editingId, {
+                    username: form.username,
+                    password: form.password,
+                    isAdmin: form.isAdmin,
+                });
+            } else {
+                await createUser({
+                    username: form.username,
+                    password: form.password,
+                    isAdmin: form.isAdmin,
+                });
+            }
+
             clearEdit();
+            await loadUsers();
         } catch (requestError) {
             setError(requestError.message);
         } finally {
@@ -118,107 +95,89 @@ function UsersManagement() {
         }
     }
 
+    async function removeUser(id) {
+        setError("");
+
+        try {
+            await deleteUser(id);
+            if (editingId === id) {
+                clearEdit();
+            }
+            await loadUsers();
+        } catch (requestError) {
+            setError(requestError.message);
+        }
+    }
+
     return (
         <PageShell
             eyebrow="Admin"
-            title="Users Management"
-            description="View all users and edit name, email, and type. No pagination is applied to this table."
+            title="Auth Users"
+            description="Manage application login accounts. This controls authentication access only."
         >
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
 
-            {editingId ? (
-                <Box component="form" className="hero-card form-stack" onSubmit={handleSubmit} sx={{ mb: 2 }}>
-                    <Typography variant="h5">Edit User</Typography>
-                    <Typography variant="body2" color="text.secondary">
-                        Editing user #{editingId}
-                    </Typography>
-                    <TextField
-                        label="Name"
-                        value={form.name}
-                        onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                        required
+            <Box component="form" className="hero-card form-stack" onSubmit={handleSubmit} sx={{ mb: 2 }}>
+                <Typography variant="h5">{editingId ? `Edit user #${editingId}` : "Create user"}</Typography>
+                <TextField
+                    label="Username"
+                    value={form.username}
+                    onChange={(event) => setForm((prev) => ({ ...prev, username: event.target.value }))}
+                    required
+                />
+                <TextField
+                    label={editingId ? "New password (optional)" : "Password"}
+                    type="password"
+                    value={form.password}
+                    onChange={(event) => setForm((prev) => ({ ...prev, password: event.target.value }))}
+                    required={!editingId}
+                />
+                <Stack direction="row" spacing={1} alignItems="center">
+                    <Switch
+                        checked={form.isAdmin}
+                        onChange={(event) => setForm((prev) => ({ ...prev, isAdmin: event.target.checked }))}
                     />
-                    <TextField
-                        label="Email"
-                        type="email"
-                        value={form.email}
-                        onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-                        required
-                    />
-                    <TextField
-                        select
-                        label="Type"
-                        value={form.type}
-                        onChange={(event) => setForm((prev) => ({ ...prev, type: event.target.value }))}
-                        required
-                    >
-                        {USER_TYPES.map((type) => (
-                            <MenuItem key={type} value={type}>
-                                {type}
-                            </MenuItem>
-                        ))}
-                    </TextField>
-                    <Stack direction="row" spacing={1}>
-                        <Button type="submit" variant="contained" disabled={saving}>
-                            {saving ? "Saving..." : "Save user"}
-                        </Button>
+                    <Typography>Admin access</Typography>
+                </Stack>
+                <Stack direction="row" spacing={1}>
+                    <Button type="submit" variant="contained" disabled={saving}>
+                        {saving ? "Saving..." : editingId ? "Save user" : "Create user"}
+                    </Button>
+                    {editingId ? (
                         <Button type="button" variant="outlined" onClick={clearEdit}>
                             Cancel
                         </Button>
-                    </Stack>
-                </Box>
-            ) : null}
+                    ) : null}
+                </Stack>
+            </Box>
 
             {loading ? <Typography>Loading users...</Typography> : null}
 
             <TableContainer className="hero-card" sx={{ overflowX: "auto" }}>
-                <Table size="small" aria-label="users table">
+                <Table size="small" aria-label="auth users table">
                     <TableHead>
                         <TableRow>
-                            <TableCell sortDirection={sortBy === "name" ? sortDirection : false}>
-                                <TableSortLabel
-                                    active={sortBy === "name"}
-                                    direction={sortBy === "name" ? sortDirection : "asc"}
-                                    onClick={() => handleSort("name")}
-                                >
-                                    Name
-                                </TableSortLabel>
-                            </TableCell>
-                            <TableCell sortDirection={sortBy === "email" ? sortDirection : false}>
-                                <TableSortLabel
-                                    active={sortBy === "email"}
-                                    direction={sortBy === "email" ? sortDirection : "asc"}
-                                    onClick={() => handleSort("email")}
-                                >
-                                    Email
-                                </TableSortLabel>
-                            </TableCell>
-                            <TableCell sortDirection={sortBy === "type" ? sortDirection : false}>
-                                <TableSortLabel
-                                    active={sortBy === "type"}
-                                    direction={sortBy === "type" ? sortDirection : "asc"}
-                                    onClick={() => handleSort("type")}
-                                >
-                                    Type
-                                </TableSortLabel>
-                            </TableCell>
+                            <TableCell>Username</TableCell>
+                            <TableCell>Admin</TableCell>
+                            <TableCell>Created</TableCell>
                             <TableCell align="right">Actions</TableCell>
                         </TableRow>
                     </TableHead>
                     <TableBody>
                         {sortedUsers.map((user) => (
-                            <TableRow
-                                key={user.id}
-                                selected={selectedUser?.id === user.id}
-                                hover
-                            >
-                                <TableCell>{user.name || "-"}</TableCell>
-                                <TableCell>{user.email}</TableCell>
-                                <TableCell>{user.type}</TableCell>
+                            <TableRow key={user.id} hover selected={editingId === user.id}>
+                                <TableCell>{user.username}</TableCell>
+                                <TableCell>{user.is_admin ? "Yes" : "No"}</TableCell>
+                                <TableCell>{formatDisplayDate(user.created_at)}</TableCell>
                                 <TableCell align="right">
-                                    <Button size="small" variant="outlined" onClick={() => beginEdit(user)}>
-                                        Edit
-                                    </Button>
+                                    <Stack direction="row" spacing={1} justifyContent="flex-end">
+                                        <Button size="small" variant="outlined" onClick={() => beginEdit(user)}>
+                                            Edit
+                                        </Button>
+                                        <Button size="small" color="error" onClick={() => removeUser(user.id)}>
+                                            Delete
+                                        </Button>
+                                    </Stack>
                                 </TableCell>
                             </TableRow>
                         ))}

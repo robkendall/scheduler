@@ -5,29 +5,27 @@ import Button from "@mui/material/Button";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { Link as RouterLink, useLocation, useNavigate } from "react-router-dom";
+import { Link as RouterLink } from "react-router-dom";
 
-import { login } from "../api/auth";
+import { resetPassword } from "../api/auth";
 
-function Login({ onAuthenticated }) {
-    const location = useLocation();
-    const navigate = useNavigate();
-    const [username, setUsername] = useState("rob");
-    const [password, setPassword] = useState("asdf");
+function PasswordReset() {
+    const [username, setUsername] = useState("");
+    const [newPassword, setNewPassword] = useState("");
     const [error, setError] = useState("");
+    const [success, setSuccess] = useState("");
     const [submitting, setSubmitting] = useState(false);
-
-    const redirectTarget = location.state?.from?.pathname || "/";
 
     async function handleSubmit(event) {
         event.preventDefault();
         setSubmitting(true);
         setError("");
+        setSuccess("");
 
         try {
-            const user = await login(username, password);
-            onAuthenticated(user);
-            navigate(redirectTarget, { replace: true });
+            await resetPassword(username, newPassword);
+            setSuccess("Password updated. You can sign in now.");
+            setNewPassword("");
         } catch (requestError) {
             setError(requestError.message);
         } finally {
@@ -41,11 +39,12 @@ function Login({ onAuthenticated }) {
                 <Typography variant="overline" sx={{ color: "primary.main", letterSpacing: "0.18em" }}>
                     Scheduler
                 </Typography>
-                <Typography variant="h3">Sign in</Typography>
+                <Typography variant="h4">Password reset</Typography>
                 <Typography variant="body1" color="text.secondary">
-                    Starter account: <strong>rob</strong> / <strong>asdf</strong>
+                    For this starter build, reset uses username + new password directly.
                 </Typography>
                 {error ? <Alert severity="error">{error}</Alert> : null}
+                {success ? <Alert severity="success">{success}</Alert> : null}
                 <TextField
                     label="Username"
                     value={username}
@@ -53,18 +52,18 @@ function Login({ onAuthenticated }) {
                     required
                 />
                 <TextField
-                    label="Password"
+                    label="New password"
                     type="password"
-                    value={password}
-                    onChange={(event) => setPassword(event.target.value)}
+                    value={newPassword}
+                    onChange={(event) => setNewPassword(event.target.value)}
                     required
                 />
                 <Stack direction="row" spacing={1}>
                     <Button type="submit" variant="contained" disabled={submitting}>
-                        {submitting ? "Signing in..." : "Sign in"}
+                        {submitting ? "Saving..." : "Reset password"}
                     </Button>
-                    <Button component={RouterLink} to="/password-reset" variant="outlined">
-                        Reset password
+                    <Button component={RouterLink} to="/login" variant="outlined">
+                        Back to login
                     </Button>
                 </Stack>
             </Box>
@@ -72,4 +71,4 @@ function Login({ onAuthenticated }) {
     );
 }
 
-export default Login;
+export default PasswordReset;

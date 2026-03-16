@@ -9,27 +9,21 @@ import ListItemText from "@mui/material/ListItemText";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
+import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
-import EventNoteRoundedIcon from "@mui/icons-material/EventNoteRounded";
-import FactCheckRoundedIcon from "@mui/icons-material/FactCheckRounded";
-import FavoriteRoundedIcon from "@mui/icons-material/FavoriteRounded";
 import GroupRoundedIcon from "@mui/icons-material/GroupRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
 import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
-import VolunteerActivismRoundedIcon from "@mui/icons-material/VolunteerActivismRounded";
-import WorkOutlineRoundedIcon from "@mui/icons-material/WorkOutlineRounded";
+import ViewInArRoundedIcon from "@mui/icons-material/ViewInArRounded";
 import { useState } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
 
 const pageLinks = [
     { icon: <DashboardRoundedIcon />, label: "Dashboard", to: "/" },
-    { icon: <FavoriteRoundedIcon />, label: "Widows", to: "/widows" },
-    { icon: <VolunteerActivismRoundedIcon />, label: "Benevolence", to: "/benevolence" },
-    { icon: <WorkOutlineRoundedIcon />, label: "Work", to: "/work" },
-    { icon: <EventNoteRoundedIcon />, label: "Schedule", to: "/schedule" },
-    { icon: <FactCheckRoundedIcon />, label: "Information", to: "/information" },
-    { icon: <GroupRoundedIcon />, label: "Users", to: "/users" },
+    { icon: <GroupRoundedIcon />, label: "People", to: "/people" },
+    { icon: <ViewInArRoundedIcon />, label: "Positions", to: "/positions" },
+    { icon: <AdminPanelSettingsRoundedIcon />, label: "Auth Users", to: "/users" },
 ];
 
 const accountLinks = [
@@ -73,7 +67,7 @@ function Navigation({ user }) {
                         minHeight: 48,
                         justifyContent: isExpanded ? "initial" : "center",
                         px: 2,
-                        borderRadius: 3,
+                        borderRadius: 0.5,
                         color: active ? "primary.main" : "text.primary",
                         backgroundColor: active ? "rgba(15, 118, 110, 0.12)" : "transparent",
                         "&:hover": {
@@ -147,7 +141,7 @@ function Navigation({ user }) {
                     }}
                 >
                     <Typography variant="overline" sx={{ color: "primary.main", letterSpacing: "0.18em" }}>
-                        Deacons
+                        Scheduler
                     </Typography>
                 </Box>
             </Box>
@@ -178,7 +172,7 @@ function Navigation({ user }) {
                             transition: "opacity 180ms ease, max-width 180ms ease",
                         }}
                     >
-                        {user?.email || "Signed out"}
+                        {user?.username || "Signed out"}
                     </Typography>
                 </Box>
                 <List sx={{ display: "grid", gap: 0.75, p: 0 }}>

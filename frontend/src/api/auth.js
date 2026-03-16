@@ -17,32 +17,31 @@ export async function getCurrentUser() {
     return data.user || null;
 }
 
-export async function login(email, password) {
+export async function login(username, password) {
     const response = await fetch("/api/login", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
         credentials: "include",
-        body: JSON.stringify({ email, password }),
+        body: JSON.stringify({ username, password }),
     });
 
     const data = await readJson(response);
     return data.user;
 }
 
-export async function register(name, email, password, type) {
-    const response = await fetch("/api/register", {
+export async function resetPassword(username, newPassword) {
+    const response = await fetch("/api/password-reset", {
         method: "POST",
         headers: {
             "Content-Type": "application/json",
         },
         credentials: "include",
-        body: JSON.stringify({ name, email, password, type }),
+        body: JSON.stringify({ username, newPassword }),
     });
 
-    const data = await readJson(response);
-    return data.user;
+    return readJson(response);
 }
 
 export async function logout() {

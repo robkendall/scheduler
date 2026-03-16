@@ -10,18 +10,15 @@ import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
 import { getCurrentUser } from "./api/auth";
 import Navigation from "./components/Navigation";
-import Benevolence from "./pages/Benevolence";
 import RequireAuth from "./components/RequireAuth";
 import Dashboard from "./pages/Dashboard";
-import Information from "./pages/Information";
 import Login from "./pages/Login";
 import Logout from "./pages/Logout";
-import Register from "./pages/Register";
-import Schedule from "./pages/Schedule";
+import PasswordReset from "./pages/PasswordReset";
+import People from "./pages/People";
+import Positions from "./pages/Positions";
 import UserProfile from "./pages/UserProfile";
 import UsersManagement from "./pages/UsersManagement";
-import Widows from "./pages/Widows";
-import Work from "./pages/Work";
 import "./App.css";
 
 const theme = createTheme({
@@ -42,13 +39,13 @@ const theme = createTheme({
         fontFamily: '"Avenir Next", "Segoe UI", sans-serif',
     },
     shape: {
-        borderRadius: 18,
+        borderRadius: 4,
     },
 });
 
 function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
     const location = useLocation();
-    const isAuthPage = location.pathname === "/login" || location.pathname === "/register";
+    const isAuthPage = location.pathname === "/login" || location.pathname === "/password-reset";
 
     const appRoutes = (
         <Routes>
@@ -59,9 +56,9 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 }
             />
             <Route
-                path="/register"
+                path="/password-reset"
                 element={
-                    user ? <Navigate to="/" replace /> : <Register onAuthenticated={onUserChange} />
+                    user ? <Navigate to="/" replace /> : <PasswordReset />
                 }
             />
             <Route path="/logout" element={<Logout onLoggedOut={onLoggedOut} />} />
@@ -82,42 +79,10 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 }
             />
             <Route
-                path="/widows"
+                path="/people"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <Widows />
-                    </RequireAuth>
-                }
-            />
-            <Route
-                path="/benevolence"
-                element={
-                    <RequireAuth authLoading={authLoading} user={user}>
-                        <Benevolence />
-                    </RequireAuth>
-                }
-            />
-            <Route
-                path="/work"
-                element={
-                    <RequireAuth authLoading={authLoading} user={user}>
-                        <Work />
-                    </RequireAuth>
-                }
-            />
-            <Route
-                path="/schedule"
-                element={
-                    <RequireAuth authLoading={authLoading} user={user}>
-                        <Schedule />
-                    </RequireAuth>
-                }
-            />
-            <Route
-                path="/information"
-                element={
-                    <RequireAuth authLoading={authLoading} user={user}>
-                        <Information user={user} />
+                        <People />
                     </RequireAuth>
                 }
             />
@@ -129,6 +94,15 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                     </RequireAuth>
                 }
             />
+            <Route
+                path="/positions"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Positions />
+                    </RequireAuth>
+                }
+            />
+            <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
     );
 
