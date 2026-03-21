@@ -6,7 +6,7 @@ export default defineConfig({
   server: {
     host: true,
     allowedHosts: ["robkendall.duckdns.org"],
-    port: 5174,
+    port: 5176,
     proxy: {
       "/api": {
         target: "http://api:3002",

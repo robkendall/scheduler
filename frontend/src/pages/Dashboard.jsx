@@ -3,10 +3,13 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
+import IconButton from "@mui/material/IconButton";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
+import ChevronLeftRoundedIcon from "@mui/icons-material/ChevronLeftRounded";
+import ChevronRightRoundedIcon from "@mui/icons-material/ChevronRightRounded";
 
 import {
     clearScheduleMonth,
@@ -30,6 +33,12 @@ function currentMonthText() {
     const now = new Date();
     const month = String(now.getMonth() + 1).padStart(2, "0");
     return `${now.getFullYear()}-${month}`;
+}
+
+function shiftMonthValue(monthValue, delta) {
+    const [year, monthPart] = monthValue.split("-").map(Number);
+    const next = new Date(year, monthPart - 1 + delta, 1);
+    return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
 }
 
 function Dashboard({ user }) {
@@ -277,55 +286,58 @@ function Dashboard({ user }) {
 
             <Box className="hero-card form-stack" sx={{ mb: 2 }}>
                 <Typography variant="h5">Month tools</Typography>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1} alignItems={{ sm: "center" }}>
-                    <TextField
-                        label="Month"
-                        type="month"
-                        value={month}
-                        onChange={(event) => setMonth(event.target.value)}
-                        InputLabelProps={{ shrink: true }}
-                    />
-                    <Button variant="contained" onClick={runPrepopulate} disabled={prepopulating}>
-                        {prepopulating ? "Generating..." : "Pre-populate month"}
-                    </Button>
-                    {clearMonthConfirm ? (
-                        <>
-                            <Button color="error" variant="contained" onClick={handleClearMonth} disabled={mutating}>
-                                Confirm clear month
-                            </Button>
-                            <Button variant="outlined" onClick={() => setClearMonthConfirm(false)} disabled={mutating}>
-                                Cancel
-                            </Button>
-                        </>
-                    ) : (
-                        <Button color="error" variant="outlined" onClick={() => setClearMonthConfirm(true)} disabled={mutating}>
-                            Clear month
+                <Stack
+                    direction={{ xs: "column", sm: "row" }}
+                    spacing={1}
+                    alignItems={{ sm: "center" }}
+                    justifyContent="space-between"
+                >
+                    <Stack direction="row" spacing={1} alignItems="center" sx={{ flexWrap: "wrap" }}>
+                        <IconButton
+                            size="small"
+                            aria-label="Previous month"
+                            onClick={() => setMonth((prev) => shiftMonthValue(prev, -1))}
+                        >
+                            <ChevronLeftRoundedIcon />
+                        </IconButton>
+                        <TextField
+                            label="Month"
+                            type="month"
+                            value={month}
+                            onChange={(event) => setMonth(event.target.value)}
+                            InputLabelProps={{ shrink: true }}
+                        />
+                        <Button variant="contained" onClick={runPrepopulate} disabled={prepopulating}>
+                            {prepopulating ? "Generating..." : "Pre-populate month"}
                         </Button>
-                    )}
+                        {clearMonthConfirm ? (
+                            <>
+                                <Button color="error" variant="contained" onClick={handleClearMonth} disabled={mutating}>
+                                    Confirm clear month
+                                </Button>
+                                <Button variant="outlined" onClick={() => setClearMonthConfirm(false)} disabled={mutating}>
+                                    Cancel
+                                </Button>
+                            </>
+                        ) : (
+                            <Button color="error" variant="outlined" onClick={() => setClearMonthConfirm(true)} disabled={mutating}>
+                                Clear month
+                            </Button>
+                        )}
+                    </Stack>
+                    <IconButton
+                        size="small"
+                        aria-label="Next month"
+                        onClick={() => setMonth((prev) => shiftMonthValue(prev, 1))}
+                        sx={{ alignSelf: { xs: "flex-end", sm: "center" } }}
+                    >
+                        <ChevronRightRoundedIcon />
+                    </IconButton>
                 </Stack>
                 <Typography variant="body2" color="text.secondary">
                     Uses normal weeks, blocked out windows, and position capability to build Sunday assignments.
                 </Typography>
             </Box>
-
-            <div className="grid-cards" style={{ marginTop: 0 }}>
-                <section className="route-card">
-                    <Typography variant="h6">People</Typography>
-                    <Typography>{dashboard?.counts?.people ?? 0}</Typography>
-                </section>
-                <section className="route-card">
-                    <Typography variant="h6">Positions</Typography>
-                    <Typography>{dashboard?.counts?.positions ?? 0}</Typography>
-                </section>
-                <section className="route-card">
-                    <Typography variant="h6">Schedule rows</Typography>
-                    <Typography>{dashboard?.counts?.schedules ?? 0}</Typography>
-                </section>
-                <section className="route-card">
-                    <Typography variant="h6">Assignments in month</Typography>
-                    <Typography>{totalAssignments}</Typography>
-                </section>
-            </div>
 
             <Box className="hero-card form-stack" sx={{ mt: 2 }}>
                 <Typography variant="h5">Month schedule</Typography>

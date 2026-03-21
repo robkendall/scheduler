@@ -1,17 +1,4 @@
 services:
-
-  db:
-    image: postgres:16
-    restart: always
-    environment:
-      POSTGRES_USER: app
-      POSTGRES_PASSWORD: password
-      POSTGRES_DB: scheduler
-    ports:
-      - "5435:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-
   api:
     build: ./api
     volumes:
@@ -20,9 +7,10 @@ services:
     ports:
       - "3006:3002"
     environment:
-      DATABASE_URL: "postgresql://app:password@db:5432/scheduler"
-    depends_on:
-      - db
+      DATABASE_URL: "postgresql://scheduler_app:scheduler_local_pw@shared-postgres:5432/scheduler_local"
+    networks:
+      - default
+      - shared_net
 
   frontend:
     build: ./frontend
@@ -30,8 +18,11 @@ services:
       - ./frontend:/app
       - /app/node_modules
     ports:
-      - "5176:5174"
+      - "5176:5176"
     command: sh -c "npm install && npm run dev"
+    networks:
+      - default
 
-volumes:
-  postgres_data:
+networks:
+  shared_net:
+    external: true

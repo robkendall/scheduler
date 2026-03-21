@@ -9,7 +9,40 @@ const pool = require("./db");
 const requireAuth = require("./middleware/auth");
 
 const app = express();
-const port = Number(process.env.API_PORT || 3002);
+app.set("trust proxy", true);
+const PORT = Number(process.env.PORT || process.env.API_PORT || 3002);
+const NODE_ENV = process.env.NODE_ENV || "development";
+const IS_PRODUCTION = NODE_ENV === "production";
+const SESSION_SECRET = process.env.SESSION_SECRET;
+
+if (IS_PRODUCTION && !SESSION_SECRET) {
+  throw new Error("SESSION_SECRET is required in production.");
+}
+
+const corsOrigins = String(process.env.CORS_ORIGIN || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+if (corsOrigins.length > 0) {
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+
+    if (origin && corsOrigins.includes(origin)) {
+      res.setHeader("Access-Control-Allow-Origin", origin);
+      res.setHeader("Vary", "Origin");
+      res.setHeader("Access-Control-Allow-Credentials", "true");
+      res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
+      res.setHeader("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    }
+
+    if (req.method === "OPTIONS") {
+      return res.sendStatus(204);
+    }
+
+    return next();
+  });
+}
 
 app.use(express.json());
 app.use(
@@ -18,11 +51,13 @@ app.use(
       pool,
       tableName: "session",
     }),
-    secret: process.env.SESSION_SECRET || "scheduler-starter-secret",
+    secret: SESSION_SECRET || "scheduler-dev-secret",
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
+      secure: IS_PRODUCTION,
+      sameSite: process.env.SESSION_COOKIE_SAMESITE || "lax",
       maxAge: 1000 * 60 * 60 * 24,
     },
   }),
@@ -156,6 +191,19 @@ app.get("/api/health", async (_req, res) => {
     service: "scheduler-api",
     time: result.rows[0].now,
   });
+});
+
+app.get("/healthz", (_req, res) => {
+  res.status(200).json({ ok: true });
+});
+
+app.get("/readyz", async (_req, res) => {
+  try {
+    await pool.query("SELECT 1");
+    return res.status(200).json({ ok: true });
+  } catch (_error) {
+    return res.status(503).json({ ok: false, error: "database unavailable" });
+  }
 });
 
 app.get("/api/me", async (req, res) => {
@@ -1850,7 +1898,7 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
   }
 });
 
-app.listen(port, () => {
+app.listen(PORT, () => {
   // eslint-disable-next-line no-console
-  console.log(`Scheduler API running on http://localhost:${port}`);
+  console.log(`scheduler-api running on http://localhost:${PORT}`);
 });
