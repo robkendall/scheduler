@@ -368,8 +368,8 @@ function People({ activeRoleId, user }) {
                 }, activeRoleId);
 
                 await syncRelatedData(created.id, [], [], []);
-                const refreshedData = await loadData();
-                beginEditWithData(created.id, refreshedData);
+                await loadData();
+                beginNewDraft();
             } else {
                 const personId = selectedPersonId;
                 const existingWeeks = normalWeeks.filter((item) => item.person_id === personId);
