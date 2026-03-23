@@ -398,38 +398,6 @@ app.post("/api/logout", (req, res) => {
   });
 });
 
-app.post("/api/password-reset", async (req, res) => {
-  const username = normalizeText(req.body.username).toLowerCase();
-  const newPassword = String(req.body.newPassword || "");
-
-  if (!username || !newPassword) {
-    return res.status(400).json({ error: "Username and new password are required." });
-  }
-
-  if (newPassword.length < 4) {
-    return res.status(400).json({ error: "New password must be at least 4 characters." });
-  }
-
-  try {
-    const passwordHash = await bcrypt.hash(newPassword, 10);
-    const result = await pool.query(
-      `UPDATE users
-       SET password_hash = $1
-       WHERE LOWER(username) = $2
-       RETURNING id, username`,
-      [passwordHash, username],
-    );
-
-    if (result.rows.length === 0) {
-      return res.status(404).json({ error: "User not found." });
-    }
-
-    return res.json({ ok: true, user: result.rows[0] });
-  } catch (error) {
-    return handleServerError(res, "Password reset failed", error);
-  }
-});
-
 app.get("/api/dashboard", requireAuth, async (req, res) => {
   const roleId = await resolveRoleId(req, res);
   if (!roleId) return;

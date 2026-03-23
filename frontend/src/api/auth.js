@@ -33,19 +33,6 @@ export async function login(username, password) {
     return data.user;
 }
 
-export async function resetPassword(username, newPassword) {
-    const response = await apiFetch("/api/password-reset", {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        credentials: "include",
-        body: JSON.stringify({ username, newPassword }),
-    });
-
-    return readJson(response);
-}
-
 export async function logout() {
     const response = await apiFetch("/api/logout", {
         method: "POST",

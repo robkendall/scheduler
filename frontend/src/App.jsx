@@ -16,7 +16,6 @@ import DashboardHome from "./pages/DashboardHome";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Logout from "./pages/Logout";
-import PasswordReset from "./pages/PasswordReset";
 import People from "./pages/People";
 import Positions from "./pages/Positions";
 import Roles from "./pages/Roles";
@@ -48,7 +47,7 @@ const theme = createTheme({
 
 function AppRoutes({ activeRoleId, authLoading, onLoggedOut, onRoleChange, onUserChange, user }) {
     const location = useLocation();
-    const isAuthPage = location.pathname === "/login" || location.pathname === "/password-reset";
+    const isAuthPage = location.pathname === "/login";
 
     const appRoutes = (
         <Routes>
@@ -56,12 +55,6 @@ function AppRoutes({ activeRoleId, authLoading, onLoggedOut, onRoleChange, onUse
                 path="/login"
                 element={
                     user ? <Navigate to="/" replace /> : <Login onAuthenticated={onUserChange} />
-                }
-            />
-            <Route
-                path="/password-reset"
-                element={
-                    user ? <Navigate to="/" replace /> : <PasswordReset />
                 }
             />
             <Route path="/logout" element={<Logout onLoggedOut={onLoggedOut} />} />

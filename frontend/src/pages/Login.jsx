@@ -5,15 +5,15 @@ import Button from "@mui/material/Button";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import { Link as RouterLink, useLocation, useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 
 import { login } from "../api/auth";
 
 function Login({ onAuthenticated }) {
     const location = useLocation();
     const navigate = useNavigate();
-    const [username, setUsername] = useState("rob");
-    const [password, setPassword] = useState("asdf");
+    const [username, setUsername] = useState("");
+    const [password, setPassword] = useState("");
     const [error, setError] = useState("");
     const [submitting, setSubmitting] = useState(false);
 
@@ -42,9 +42,6 @@ function Login({ onAuthenticated }) {
                     Scheduler
                 </Typography>
                 <Typography variant="h3">Sign in</Typography>
-                <Typography variant="body1" color="text.secondary">
-                    Starter account: <strong>rob</strong> / <strong>asdf</strong>
-                </Typography>
                 {error ? <Alert severity="error">{error}</Alert> : null}
                 <TextField
                     label="Username"
@@ -62,9 +59,6 @@ function Login({ onAuthenticated }) {
                 <Stack direction="row" spacing={1}>
                     <Button type="submit" variant="contained" disabled={submitting}>
                         {submitting ? "Signing in..." : "Sign in"}
-                    </Button>
-                    <Button component={RouterLink} to="/password-reset" variant="outlined">
-                        Reset password
                     </Button>
                 </Stack>
             </Box>
