@@ -2,7 +2,6 @@ services:
   - type: web
     name: cg-scheduler-api
     runtime: node
-    region: ohio
     rootDir: api
     plan: free
     autoDeploy: true
@@ -26,7 +25,6 @@ services:
   - type: web
     name: cg-scheduler
     runtime: static
-    region: ohio
     rootDir: frontend
     buildCommand: npm ci && npm run build
     staticPublishPath: dist
