@@ -1,6 +1,6 @@
 services:
   - type: web
-    name: scheduler-api
+    name: cg-scheduler-api
     runtime: node
     region: ohio
     rootDir: api
@@ -22,7 +22,7 @@ services:
         sync: false
 
   - type: web
-    name: scheduler-frontend
+    name: cg-scheduler
     runtime: static
     region: ohio
     rootDir: frontend

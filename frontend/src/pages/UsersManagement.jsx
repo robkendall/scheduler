@@ -2,6 +2,8 @@ import { useEffect, useMemo, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
+import Checkbox from "@mui/material/Checkbox";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import Table from "@mui/material/Table";
@@ -13,11 +15,21 @@ import TableRow from "@mui/material/TableRow";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 
-import { createUser, deleteUser, getUsers, updateUser } from "../api/scheduler";
+import {
+    createUser,
+    deleteUser,
+    getRoles,
+    getUserRoles,
+    getUsers,
+    updateUser,
+    updateUserRoles,
+} from "../api/scheduler";
 import PageShell from "../components/PageShell";
 import { formatDisplayDate } from "../utils/date";
 
 function UsersManagement() {
+    const [roles, setRoles] = useState([]);
+    const [userRolesById, setUserRolesById] = useState({});
     const [users, setUsers] = useState([]);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
@@ -27,6 +39,7 @@ function UsersManagement() {
         username: "",
         password: "",
         isAdmin: false,
+        roleIds: [],
     });
 
     async function loadUsers() {
@@ -34,8 +47,14 @@ function UsersManagement() {
         setError("");
 
         try {
-            const data = await getUsers();
-            setUsers(data);
+            const [userData, roleData] = await Promise.all([getUsers(), getRoles()]);
+            const roleEntries = await Promise.all(
+                userData.map(async (user) => [user.id, await getUserRoles(user.id)]),
+            );
+
+            setUsers(userData);
+            setRoles(roleData);
+            setUserRolesById(Object.fromEntries(roleEntries));
         } catch (requestError) {
             setError(requestError.message);
         } finally {
@@ -58,12 +77,13 @@ function UsersManagement() {
             username: user.username,
             password: "",
             isAdmin: Boolean(user.is_admin),
+            roleIds: (userRolesById[user.id] || []).map((role) => role.id),
         });
     }
 
     function clearEdit() {
         setEditingId(null);
-        setForm({ username: "", password: "", isAdmin: false });
+        setForm({ username: "", password: "", isAdmin: false, roleIds: [] });
     }
 
     async function handleSubmit(event) {
@@ -78,12 +98,14 @@ function UsersManagement() {
                     password: form.password,
                     isAdmin: form.isAdmin,
                 });
+                await updateUserRoles(editingId, form.roleIds);
             } else {
-                await createUser({
+                const createdUser = await createUser({
                     username: form.username,
                     password: form.password,
                     isAdmin: form.isAdmin,
                 });
+                await updateUserRoles(createdUser.id, form.roleIds);
             }
 
             clearEdit();
@@ -93,6 +115,15 @@ function UsersManagement() {
         } finally {
             setSaving(false);
         }
+    }
+
+    function toggleRole(roleId) {
+        setForm((prev) => ({
+            ...prev,
+            roleIds: prev.roleIds.includes(roleId)
+                ? prev.roleIds.filter((id) => id !== roleId)
+                : [...prev.roleIds, roleId],
+        }));
     }
 
     async function removeUser(id) {
@@ -139,6 +170,23 @@ function UsersManagement() {
                     />
                     <Typography>Admin access</Typography>
                 </Stack>
+                <Box>
+                    <Typography variant="subtitle2" sx={{ mb: 1 }}>Roles</Typography>
+                    <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
+                        {roles.map((role) => (
+                            <FormControlLabel
+                                key={role.id}
+                                label={role.name}
+                                control={
+                                    <Checkbox
+                                        checked={form.roleIds.includes(role.id)}
+                                        onChange={() => toggleRole(role.id)}
+                                    />
+                                }
+                            />
+                        ))}
+                    </Stack>
+                </Box>
                 <Stack direction="row" spacing={1}>
                     <Button type="submit" variant="contained" disabled={saving}>
                         {saving ? "Saving..." : editingId ? "Save user" : "Create user"}
@@ -159,6 +207,7 @@ function UsersManagement() {
                         <TableRow>
                             <TableCell>Username</TableCell>
                             <TableCell>Admin</TableCell>
+                            <TableCell>Roles</TableCell>
                             <TableCell>Created</TableCell>
                             <TableCell align="right">Actions</TableCell>
                         </TableRow>
@@ -168,6 +217,10 @@ function UsersManagement() {
                             <TableRow key={user.id} hover selected={editingId === user.id}>
                                 <TableCell>{user.username}</TableCell>
                                 <TableCell>{user.is_admin ? "Yes" : "No"}</TableCell>
+                                <TableCell>
+                                    {(userRolesById[user.id] || []).map((role) => role.name).join(", ") || "None"
+                                    }
+                                </TableCell>
                                 <TableCell>{formatDisplayDate(user.created_at)}</TableCell>
                                 <TableCell align="right">
                                     <Stack direction="row" spacing={1} justifyContent="flex-end">

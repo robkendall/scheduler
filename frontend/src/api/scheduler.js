@@ -23,8 +23,24 @@ async function request(path, options = {}) {
   return readJson(response);
 }
 
-export function getDashboard() {
-  return request("/api/dashboard");
+function buildRoleQuery(path, roleId) {
+  if (!roleId) {
+    return path;
+  }
+
+  const separator = path.includes("?") ? "&" : "?";
+  return `${path}${separator}roleId=${encodeURIComponent(roleId)}`;
+}
+
+function withRole(payload, roleId) {
+  return {
+    ...payload,
+    roleId,
+  };
+}
+
+export function getDashboard(roleId) {
+  return request(buildRoleQuery("/api/dashboard", roleId));
 }
 
 export function getUsers() {
@@ -51,160 +67,195 @@ export function deleteUser(id) {
   });
 }
 
-export function getPeople() {
-  return request("/api/people");
+export function getRoles() {
+  return request("/api/roles");
 }
 
-export function createPerson(payload) {
+export function createRole(payload) {
+  return request("/api/roles", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateRole(id, payload) {
+  return request(`/api/roles/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function deleteRole(id) {
+  return request(`/api/roles/${id}`, {
+    method: "DELETE",
+  });
+}
+
+export function getUserRoles(id) {
+  return request(`/api/users/${id}/roles`);
+}
+
+export function updateUserRoles(id, roleIds) {
+  return request(`/api/users/${id}/roles`, {
+    method: "PUT",
+    body: JSON.stringify({ roleIds }),
+  });
+}
+
+export function getPeople(roleId) {
+  return request(buildRoleQuery("/api/people", roleId));
+}
+
+export function createPerson(payload, roleId) {
   return request("/api/people", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function updatePerson(id, payload) {
-  return request(`/api/people/${id}`, {
+export function updatePerson(id, payload, roleId) {
+  return request(buildRoleQuery(`/api/people/${id}`, roleId), {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function deletePerson(id) {
-  return request(`/api/people/${id}`, {
+export function deletePerson(id, roleId) {
+  return request(buildRoleQuery(`/api/people/${id}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function getNormalWeeks() {
-  return request("/api/normal-weeks");
+export function getNormalWeeks(roleId) {
+  return request(buildRoleQuery("/api/normal-weeks", roleId));
 }
 
-export function createNormalWeek(payload) {
+export function createNormalWeek(payload, roleId) {
   return request("/api/normal-weeks", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function deleteNormalWeek(id) {
-  return request(`/api/normal-weeks/${id}`, {
+export function deleteNormalWeek(id, roleId) {
+  return request(buildRoleQuery(`/api/normal-weeks/${id}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function getBlockedOut() {
-  return request("/api/blocked-out");
+export function getBlockedOut(roleId) {
+  return request(buildRoleQuery("/api/blocked-out", roleId));
 }
 
-export function createBlockedOut(payload) {
+export function createBlockedOut(payload, roleId) {
   return request("/api/blocked-out", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function deleteBlockedOut(id) {
-  return request(`/api/blocked-out/${id}`, {
+export function deleteBlockedOut(id, roleId) {
+  return request(buildRoleQuery(`/api/blocked-out/${id}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function getPositions() {
-  return request("/api/positions");
+export function getPositions(roleId) {
+  return request(buildRoleQuery("/api/positions", roleId));
 }
 
-export function createPosition(payload) {
+export function createPosition(payload, roleId) {
   return request("/api/positions", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function updatePosition(id, payload) {
-  return request(`/api/positions/${id}`, {
+export function updatePosition(id, payload, roleId) {
+  return request(buildRoleQuery(`/api/positions/${id}`, roleId), {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function reorderPositions(orderedPositionIds) {
+export function reorderPositions(orderedPositionIds, roleId) {
   return request("/api/positions/reorder", {
     method: "PUT",
-    body: JSON.stringify({ orderedPositionIds }),
+    body: JSON.stringify(withRole({ orderedPositionIds }, roleId)),
   });
 }
 
-export function deletePosition(id) {
-  return request(`/api/positions/${id}`, {
+export function deletePosition(id, roleId) {
+  return request(buildRoleQuery(`/api/positions/${id}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function getPeoplePositions() {
-  return request("/api/people-positions");
+export function getPeoplePositions(roleId) {
+  return request(buildRoleQuery("/api/people-positions", roleId));
 }
 
-export function addPersonPosition(personId, positionId) {
+export function addPersonPosition(personId, positionId, roleId) {
   return request(`/api/people/${personId}/positions`, {
     method: "POST",
-    body: JSON.stringify({ positionId }),
+    body: JSON.stringify(withRole({ positionId }, roleId)),
   });
 }
 
-export function reorderPersonPositions(personId, orderedPositionIds) {
+export function reorderPersonPositions(personId, orderedPositionIds, roleId) {
   return request(`/api/people/${personId}/positions/reorder`, {
     method: "PUT",
-    body: JSON.stringify({ orderedPositionIds }),
+    body: JSON.stringify(withRole({ orderedPositionIds }, roleId)),
   });
 }
 
-export function removePersonPosition(personId, positionId) {
-  return request(`/api/people/${personId}/positions/${positionId}`, {
+export function removePersonPosition(personId, positionId, roleId) {
+  return request(buildRoleQuery(`/api/people/${personId}/positions/${positionId}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function getSchedule(month) {
+export function getSchedule(month, roleId) {
   const query = month ? `?month=${encodeURIComponent(month)}` : "";
-  return request(`/api/schedule${query}`);
+  return request(buildRoleQuery(`/api/schedule${query}`, roleId));
 }
 
-export function prepopulateSchedule(month) {
+export function prepopulateSchedule(month, roleId) {
   return request("/api/schedule/prepopulate", {
     method: "POST",
-    body: JSON.stringify({ month }),
+    body: JSON.stringify(withRole({ month }, roleId)),
   });
 }
 
-export function createPeopleSchedule(payload) {
+export function createPeopleSchedule(payload, roleId) {
   return request("/api/people-schedule", {
     method: "POST",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function updatePeopleSchedule(id, payload) {
-  return request(`/api/people-schedule/${id}`, {
+export function updatePeopleSchedule(id, payload, roleId) {
+  return request(buildRoleQuery(`/api/people-schedule/${id}`, roleId), {
     method: "PUT",
-    body: JSON.stringify(payload),
+    body: JSON.stringify(withRole(payload, roleId)),
   });
 }
 
-export function deletePeopleSchedule(id) {
-  return request(`/api/people-schedule/${id}`, {
+export function deletePeopleSchedule(id, roleId) {
+  return request(buildRoleQuery(`/api/people-schedule/${id}`, roleId), {
     method: "DELETE",
   });
 }
 
-export function clearScheduleAssignments(scheduleId) {
-  return request(`/api/schedule/${scheduleId}/assignments`, {
+export function clearScheduleAssignments(scheduleId, roleId) {
+  return request(buildRoleQuery(`/api/schedule/${scheduleId}/assignments`, roleId), {
     method: "DELETE",
   });
 }
 
-export function clearScheduleMonth(month) {
+export function clearScheduleMonth(month, roleId) {
   const query = month ? `?month=${encodeURIComponent(month)}` : "";
-  return request(`/api/schedule${query}`, {
+  return request(buildRoleQuery(`/api/schedule${query}`, roleId), {
     method: "DELETE",
   });
 }

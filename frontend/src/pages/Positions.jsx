@@ -19,7 +19,7 @@ import {
 } from "../api/scheduler";
 import PageShell from "../components/PageShell";
 
-function Positions() {
+function Positions({ activeRoleId, user }) {
     const [positions, setPositions] = useState([]);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
@@ -29,6 +29,7 @@ function Positions() {
     const [editingName, setEditingName] = useState("");
     const [dragIndex, setDragIndex] = useState(null);
     const [form, setForm] = useState({ name: "", required: true });
+    const activeRoleName = user?.roles?.find((role) => role.id === activeRoleId)?.name || "Role";
 
     const sortedPositions = useMemo(
         () => [...positions].sort((left, right) => left.priority - right.priority || left.name.localeCompare(right.name)),
@@ -36,11 +37,17 @@ function Positions() {
     );
 
     async function loadPositions() {
+        if (!activeRoleId) {
+            setPositions([]);
+            setLoading(false);
+            return;
+        }
+
         setLoading(true);
         setError("");
 
         try {
-            const data = await getPositions();
+            const data = await getPositions(activeRoleId);
             setPositions(data);
         } catch (requestError) {
             setError(requestError.message);
@@ -51,7 +58,7 @@ function Positions() {
 
     useEffect(() => {
         loadPositions();
-    }, []);
+    }, [activeRoleId]);
 
     async function handleSubmit(event) {
         event.preventDefault();
@@ -62,7 +69,7 @@ function Positions() {
             await createPosition({
                 name: form.name,
                 required: Boolean(form.required),
-            });
+            }, activeRoleId);
             setForm({ name: "", required: true });
             await loadPositions();
         } catch (requestError) {
@@ -80,7 +87,7 @@ function Positions() {
             await updatePosition(position.id, {
                 name: position.name,
                 required: nextRequired,
-            });
+            }, activeRoleId);
             await loadPositions();
         } catch (requestError) {
             setError(requestError.message);
@@ -114,7 +121,7 @@ function Positions() {
             await updatePosition(position.id, {
                 name: trimmedName,
                 required: Boolean(position.required),
-            });
+            }, activeRoleId);
             cancelEditing();
             await loadPositions();
         } catch (requestError) {
@@ -128,7 +135,7 @@ function Positions() {
         setError("");
 
         try {
-            await deletePosition(id);
+            await deletePosition(id, activeRoleId);
             await loadPositions();
         } catch (requestError) {
             setError(requestError.message);
@@ -148,7 +155,7 @@ function Positions() {
         setDragIndex(null);
 
         try {
-            await reorderPositions(next.map((position) => position.id));
+            await reorderPositions(next.map((position) => position.id), activeRoleId);
             await loadPositions();
         } catch (requestError) {
             setError(requestError.message);
@@ -159,9 +166,10 @@ function Positions() {
     return (
         <PageShell
             eyebrow="Configuration"
-            title="Positions"
-            description="Manage scheduling positions. Drag and drop to reorder priority."
+            title={`${activeRoleName} Positions`}
+            description={`Manage scheduling positions for ${user?.roles?.find((role) => role.id === activeRoleId)?.name || "the selected role"}.`}
         >
+            {!activeRoleId ? <Alert severity="warning" sx={{ mb: 2 }}>No role is selected for this account.</Alert> : null}
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
 
             <Box component="form" className="hero-card form-stack" onSubmit={handleSubmit} sx={{ mb: 2 }}>

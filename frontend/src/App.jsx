@@ -10,13 +10,16 @@ import { CssBaseline, ThemeProvider, createTheme } from "@mui/material";
 
 import { getCurrentUser } from "./api/auth";
 import Navigation from "./components/Navigation";
+import RequireAdmin from "./components/RequireAdmin";
 import RequireAuth from "./components/RequireAuth";
+import DashboardHome from "./pages/DashboardHome";
 import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Logout from "./pages/Logout";
 import PasswordReset from "./pages/PasswordReset";
 import People from "./pages/People";
 import Positions from "./pages/Positions";
+import Roles from "./pages/Roles";
 import UserProfile from "./pages/UserProfile";
 import UsersManagement from "./pages/UsersManagement";
 import "./App.css";
@@ -43,7 +46,7 @@ const theme = createTheme({
     },
 });
 
-function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
+function AppRoutes({ activeRoleId, authLoading, onLoggedOut, onRoleChange, onUserChange, user }) {
     const location = useLocation();
     const isAuthPage = location.pathname === "/login" || location.pathname === "/password-reset";
 
@@ -66,7 +69,15 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 path="/"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <Dashboard user={user} />
+                        <DashboardHome activeRoleId={activeRoleId} onRoleChange={onRoleChange} user={user} />
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/calendar"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <Dashboard activeRoleId={activeRoleId} onRoleChange={onRoleChange} user={user} />
                     </RequireAuth>
                 }
             />
@@ -74,7 +85,7 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 path="/profile"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <UserProfile user={user} />
+                        <UserProfile activeRoleId={activeRoleId} user={user} />
                     </RequireAuth>
                 }
             />
@@ -82,7 +93,7 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 path="/people"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <People />
+                        <People activeRoleId={activeRoleId} user={user} />
                     </RequireAuth>
                 }
             />
@@ -90,7 +101,19 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 path="/users"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <UsersManagement />
+                        <RequireAdmin user={user}>
+                            <UsersManagement />
+                        </RequireAdmin>
+                    </RequireAuth>
+                }
+            />
+            <Route
+                path="/roles"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <RequireAdmin user={user}>
+                            <Roles />
+                        </RequireAdmin>
                     </RequireAuth>
                 }
             />
@@ -98,7 +121,7 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
                 path="/positions"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <Positions />
+                        <Positions activeRoleId={activeRoleId} user={user} />
                     </RequireAuth>
                 }
             />
@@ -121,6 +144,7 @@ function AppRoutes({ authLoading, onLoggedOut, onUserChange, user }) {
 function App() {
     const [user, setUser] = useState(null);
     const [authLoading, setAuthLoading] = useState(true);
+    const [activeRoleId, setActiveRoleId] = useState(null);
 
     useEffect(() => {
         let active = true;
@@ -142,13 +166,27 @@ function App() {
         };
     }, []);
 
+    useEffect(() => {
+        if (!user?.roles?.length) {
+            setActiveRoleId(null);
+            return;
+        }
+
+        const hasCurrentRole = user.roles.some((role) => role.id === activeRoleId);
+        if (!hasCurrentRole) {
+            setActiveRoleId(user.roles[0].id);
+        }
+    }, [activeRoleId, user]);
+
     return (
         <ThemeProvider theme={theme}>
             <CssBaseline />
             <BrowserRouter>
                 <AppRoutes
+                    activeRoleId={activeRoleId}
                     authLoading={authLoading}
                     onLoggedOut={() => setUser(null)}
+                    onRoleChange={setActiveRoleId}
                     onUserChange={setUser}
                     user={user}
                 />

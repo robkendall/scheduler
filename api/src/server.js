@@ -184,6 +184,99 @@ function handleServerError(res, context, error) {
   return res.status(500).json({ error: `${context}.` });
 }
 
+// Validates roleId and checks access. Returns the numeric roleId or null (having already sent a response).
+async function resolveRoleId(req, res) {
+  const raw = req.query.roleId ?? req.body.roleId;
+  const roleId = parsePositiveInt(raw);
+  if (!roleId) {
+    res.status(400).json({ error: "roleId is required." });
+    return null;
+  }
+
+  if (req.session.userIsAdmin) {
+    return roleId;
+  }
+
+  try {
+    const access = await pool.query(
+      "SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2",
+      [req.session.userId, roleId],
+    );
+    if (access.rows.length === 0) {
+      res.status(403).json({ error: "Access denied to this role." });
+      return null;
+    }
+    return roleId;
+  } catch (error) {
+    handleServerError(res, "Role access check failed", error);
+    return null;
+  }
+}
+
+async function hasRoleScopedRecord(query, params) {
+  const result = await pool.query(query, params);
+  return result.rows.length > 0;
+}
+
+async function ensurePersonInRole(personId, roleId, res) {
+  const ok = await hasRoleScopedRecord(
+    "SELECT 1 FROM people WHERE id = $1 AND role_id = $2",
+    [personId, roleId],
+  );
+
+  if (!ok) {
+    res.status(404).json({ error: "Person not found." });
+    return false;
+  }
+
+  return true;
+}
+
+async function ensurePositionInRole(positionId, roleId, res) {
+  const ok = await hasRoleScopedRecord(
+    "SELECT 1 FROM positions WHERE id = $1 AND role_id = $2",
+    [positionId, roleId],
+  );
+
+  if (!ok) {
+    res.status(404).json({ error: "Position not found." });
+    return false;
+  }
+
+  return true;
+}
+
+async function ensureScheduleInRole(scheduleId, roleId, res) {
+  const ok = await hasRoleScopedRecord(
+    "SELECT 1 FROM schedule WHERE id = $1 AND role_id = $2",
+    [scheduleId, roleId],
+  );
+
+  if (!ok) {
+    res.status(404).json({ error: "Schedule row not found." });
+    return false;
+  }
+
+  return true;
+}
+
+async function ensureAssignmentInRole(assignmentId, roleId, res) {
+  const ok = await hasRoleScopedRecord(
+    `SELECT 1
+     FROM people_schedule ps
+     JOIN schedule s ON s.id = ps.schedule_id
+     WHERE ps.id = $1 AND s.role_id = $2`,
+    [assignmentId, roleId],
+  );
+
+  if (!ok) {
+    res.status(404).json({ error: "People schedule assignment not found." });
+    return false;
+  }
+
+  return true;
+}
+
 app.get("/api/health", async (_req, res) => {
   const result = await pool.query("SELECT NOW() AS now");
   res.json({
@@ -217,13 +310,29 @@ app.get("/api/me", async (req, res) => {
     return res.json({ user: null });
   }
 
-  return res.json({
-    user: {
-      id: user.id,
-      username: user.username,
-      isAdmin: user.is_admin,
-    },
-  });
+  try {
+    const rolesResult = user.is_admin
+      ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
+      : await pool.query(
+          `SELECT r.id, r.name
+           FROM roles r
+           JOIN user_roles ur ON ur.role_id = r.id
+           WHERE ur.user_id = $1
+           ORDER BY r.name ASC`,
+          [user.id],
+        );
+
+    return res.json({
+      user: {
+        id: user.id,
+        username: user.username,
+        isAdmin: user.is_admin,
+        roles: rolesResult.rows,
+      },
+    });
+  } catch (error) {
+    return handleServerError(res, "Failed to load user roles", error);
+  }
 });
 
 app.post("/api/login", async (req, res) => {
@@ -254,11 +363,23 @@ app.post("/api/login", async (req, res) => {
     req.session.userName = user.username;
     req.session.userIsAdmin = user.is_admin;
 
+    const rolesResult = user.is_admin
+      ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
+      : await pool.query(
+          `SELECT r.id, r.name
+           FROM roles r
+           JOIN user_roles ur ON ur.role_id = r.id
+           WHERE ur.user_id = $1
+           ORDER BY r.name ASC`,
+          [user.id],
+        );
+
     return res.json({
       user: {
         id: user.id,
         username: user.username,
         isAdmin: user.is_admin,
+        roles: rolesResult.rows,
       },
     });
   } catch (error) {
@@ -309,21 +430,25 @@ app.post("/api/password-reset", async (req, res) => {
   }
 });
 
-app.get("/api/dashboard", requireAuth, async (_req, res) => {
+app.get("/api/dashboard", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const [peopleCount, positionCount, scheduleCount, nextEntries] = await Promise.all([
-      pool.query("SELECT COUNT(*)::int AS count FROM people"),
-      pool.query("SELECT COUNT(*)::int AS count FROM positions"),
-      pool.query("SELECT COUNT(*)::int AS count FROM schedule"),
+      pool.query("SELECT COUNT(*)::int AS count FROM people WHERE role_id = $1", [roleId]),
+      pool.query("SELECT COUNT(*)::int AS count FROM positions WHERE role_id = $1", [roleId]),
+      pool.query("SELECT COUNT(*)::int AS count FROM schedule WHERE role_id = $1", [roleId]),
       pool.query(
         `SELECT s.id, s.track_date, s.week_number,
                 COUNT(ps.id)::int AS assignment_count
          FROM schedule s
          LEFT JOIN people_schedule ps ON ps.schedule_id = s.id
-         WHERE s.track_date >= CURRENT_DATE
+         WHERE s.track_date >= CURRENT_DATE AND s.role_id = $1
          GROUP BY s.id
          ORDER BY s.track_date ASC
          LIMIT 6`,
+        [roleId],
       ),
     ]);
 
@@ -482,12 +607,142 @@ app.delete("/api/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
-app.get("/api/people", requireAuth, async (_req, res) => {
+// --- Roles ---
+
+app.get("/api/roles", requireAdmin, async (_req, res) => {
+  try {
+    const result = await pool.query("SELECT id, name, created_at FROM roles ORDER BY name ASC");
+    return res.json(result.rows);
+  } catch (error) {
+    return handleServerError(res, "Failed to load roles", error);
+  }
+});
+
+app.post("/api/roles", requireAdmin, async (req, res) => {
+  const name = normalizeText(req.body.name);
+  if (!name) {
+    return res.status(400).json({ error: "Name is required." });
+  }
+
+  try {
+    const result = await pool.query(
+      "INSERT INTO roles (name) VALUES ($1) RETURNING id, name, created_at",
+      [name],
+    );
+    return res.status(201).json(result.rows[0]);
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "Role name already exists." });
+    }
+    return handleServerError(res, "Failed to create role", error);
+  }
+});
+
+app.put("/api/roles/:id", requireAdmin, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  const name = normalizeText(req.body.name);
+  if (!id || !name) {
+    return res.status(400).json({ error: "Valid ID and name are required." });
+  }
+
+  try {
+    const result = await pool.query(
+      "UPDATE roles SET name = $1 WHERE id = $2 RETURNING id, name, created_at",
+      [name, id],
+    );
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Role not found." });
+    }
+    return res.json(result.rows[0]);
+  } catch (error) {
+    if (error.code === "23505") {
+      return res.status(409).json({ error: "Role name already exists." });
+    }
+    return handleServerError(res, "Failed to update role", error);
+  }
+});
+
+app.delete("/api/roles/:id", requireAdmin, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: "Valid ID is required." });
+  }
+
+  try {
+    const result = await pool.query("DELETE FROM roles WHERE id = $1 RETURNING id", [id]);
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: "Role not found." });
+    }
+    return res.json({ ok: true });
+  } catch (error) {
+    return handleServerError(res, "Failed to delete role", error);
+  }
+});
+
+// --- User roles ---
+
+app.get("/api/users/:id/roles", requireAdmin, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: "Valid user ID is required." });
+  }
+
+  try {
+    const result = await pool.query(
+      `SELECT r.id, r.name
+       FROM roles r
+       JOIN user_roles ur ON ur.role_id = r.id
+       WHERE ur.user_id = $1
+       ORDER BY r.name ASC`,
+      [id],
+    );
+    return res.json(result.rows);
+  } catch (error) {
+    return handleServerError(res, "Failed to load user roles", error);
+  }
+});
+
+app.put("/api/users/:id/roles", requireAdmin, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  const roleIds = Array.isArray(req.body.roleIds)
+    ? req.body.roleIds.map((v) => parsePositiveInt(v)).filter(Boolean)
+    : [];
+
+  if (!id) {
+    return res.status(400).json({ error: "Valid user ID is required." });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("DELETE FROM user_roles WHERE user_id = $1", [id]);
+    for (const roleId of roleIds) {
+      await client.query(
+        "INSERT INTO user_roles (user_id, role_id) VALUES ($1, $2) ON CONFLICT DO NOTHING",
+        [id, roleId],
+      );
+    }
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return handleServerError(res, "Failed to update user roles", error);
+  } finally {
+    client.release();
+  }
+});
+
+app.get("/api/people", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT id, name, include_in_auto_schedule, created_at, updated_at
        FROM people
+       WHERE role_id = $1
        ORDER BY name ASC`,
+      [roleId],
     );
     return res.json(result.rows);
   } catch (error) {
@@ -501,12 +756,15 @@ app.get("/api/people/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT id, name, include_in_auto_schedule, created_at, updated_at
        FROM people
-       WHERE id = $1`,
-      [id],
+       WHERE id = $1 AND role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -526,12 +784,15 @@ app.post("/api/people", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Name is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
-      `INSERT INTO people (name, include_in_auto_schedule)
-       VALUES ($1, $2)
+      `INSERT INTO people (name, include_in_auto_schedule, role_id)
+       VALUES ($1, $2, $3)
        RETURNING id, name, include_in_auto_schedule, created_at, updated_at`,
-      [name, includeInAutoSchedule],
+      [name, includeInAutoSchedule, roleId],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -551,15 +812,18 @@ app.put("/api/people/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID and name are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `UPDATE people
        SET name = $1,
            include_in_auto_schedule = COALESCE($2, include_in_auto_schedule),
            updated_at = NOW()
-       WHERE id = $3
+       WHERE id = $3 AND role_id = $4
        RETURNING id, name, include_in_auto_schedule, created_at, updated_at`,
-      [name, includeInAutoSchedule, id],
+      [name, includeInAutoSchedule, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -578,8 +842,14 @@ app.delete("/api/people/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const result = await pool.query("DELETE FROM people WHERE id = $1 RETURNING id", [id]);
+    const result = await pool.query(
+      "DELETE FROM people WHERE id = $1 AND role_id = $2 RETURNING id",
+      [id, roleId],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Person not found." });
@@ -591,13 +861,18 @@ app.delete("/api/people/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/normal-weeks", requireAuth, async (_req, res) => {
+app.get("/api/normal-weeks", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT nw.id, nw.person_id, p.name AS person_name, nw.week_number, nw.created_at, nw.updated_at
        FROM normal_weeks nw
        JOIN people p ON p.id = nw.person_id
+       WHERE p.role_id = $1
        ORDER BY p.name ASC, nw.week_number ASC`,
+      [roleId],
     );
 
     return res.json(result.rows);
@@ -612,13 +887,16 @@ app.get("/api/normal-weeks/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT nw.id, nw.person_id, p.name AS person_name, nw.week_number, nw.created_at, nw.updated_at
        FROM normal_weeks nw
        JOIN people p ON p.id = nw.person_id
-       WHERE nw.id = $1`,
-      [id],
+       WHERE nw.id = $1 AND p.role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -637,6 +915,13 @@ app.post("/api/normal-weeks", requireAuth, async (req, res) => {
 
   if (!personId || !weekNumber || weekNumber > 5) {
     return res.status(400).json({ error: "Valid person ID and week number (1-5) are required." });
+  }
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
   }
 
   try {
@@ -670,6 +955,13 @@ app.put("/api/normal-weeks/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID, person ID, and week number (1-5) are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
   try {
     const result = await pool.query(
       `UPDATE normal_weeks
@@ -677,8 +969,11 @@ app.put("/api/normal-weeks/:id", requireAuth, async (req, res) => {
            week_number = $2,
            updated_at = NOW()
        WHERE id = $3
+         AND EXISTS (
+           SELECT 1 FROM people p WHERE p.id = normal_weeks.person_id AND p.role_id = $4
+         )
        RETURNING id, person_id, week_number, created_at, updated_at`,
-      [personId, weekNumber, id],
+      [personId, weekNumber, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -705,8 +1000,19 @@ app.delete("/api/normal-weeks/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const result = await pool.query("DELETE FROM normal_weeks WHERE id = $1 RETURNING id", [id]);
+    const result = await pool.query(
+      `DELETE FROM normal_weeks nw
+       WHERE nw.id = $1
+         AND EXISTS (
+           SELECT 1 FROM people p WHERE p.id = nw.person_id AND p.role_id = $2
+         )
+       RETURNING id`,
+      [id, roleId],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Normal week preference not found." });
@@ -718,13 +1024,18 @@ app.delete("/api/normal-weeks/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/blocked-out", requireAuth, async (_req, res) => {
+app.get("/api/blocked-out", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT b.id, b.person_id, p.name AS person_name, b.start_date, b.end_date, b.created_at, b.updated_at
        FROM blocked_out b
        JOIN people p ON p.id = b.person_id
+       WHERE p.role_id = $1
        ORDER BY b.start_date ASC, p.name ASC`,
+      [roleId],
     );
 
     return res.json(result.rows);
@@ -739,13 +1050,16 @@ app.get("/api/blocked-out/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT b.id, b.person_id, p.name AS person_name, b.start_date, b.end_date, b.created_at, b.updated_at
        FROM blocked_out b
        JOIN people p ON p.id = b.person_id
-       WHERE b.id = $1`,
-      [id],
+       WHERE b.id = $1 AND p.role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -769,6 +1083,13 @@ app.post("/api/blocked-out", requireAuth, async (req, res) => {
 
   if (startDate > endDate) {
     return res.status(400).json({ error: "Start date must be on or before end date." });
+  }
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
   }
 
   try {
@@ -803,6 +1124,13 @@ app.put("/api/blocked-out/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Start date must be on or before end date." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
   try {
     const result = await pool.query(
       `UPDATE blocked_out
@@ -811,8 +1139,11 @@ app.put("/api/blocked-out/:id", requireAuth, async (req, res) => {
            end_date = $3,
            updated_at = NOW()
        WHERE id = $4
+         AND EXISTS (
+           SELECT 1 FROM people p WHERE p.id = blocked_out.person_id AND p.role_id = $5
+         )
        RETURNING id, person_id, start_date, end_date, created_at, updated_at`,
-      [personId, startDate, endDate, id],
+      [personId, startDate, endDate, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -835,8 +1166,19 @@ app.delete("/api/blocked-out/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const result = await pool.query("DELETE FROM blocked_out WHERE id = $1 RETURNING id", [id]);
+    const result = await pool.query(
+      `DELETE FROM blocked_out b
+       WHERE b.id = $1
+         AND EXISTS (
+           SELECT 1 FROM people p WHERE p.id = b.person_id AND p.role_id = $2
+         )
+       RETURNING id`,
+      [id, roleId],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Blocked out entry not found." });
@@ -848,12 +1190,17 @@ app.delete("/api/blocked-out/:id", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/positions", requireAuth, async (_req, res) => {
+app.get("/api/positions", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT id, name, required, priority, created_at, updated_at
        FROM positions
+       WHERE role_id = $1
        ORDER BY priority ASC, name ASC`,
+      [roleId],
     );
 
     return res.json(result.rows);
@@ -868,12 +1215,15 @@ app.get("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT id, name, required, priority, created_at, updated_at
        FROM positions
-       WHERE id = $1`,
-      [id],
+       WHERE id = $1 AND role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -894,17 +1244,21 @@ app.post("/api/positions", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Name is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const priorityResult = await pool.query(
-      "SELECT COALESCE(MAX(priority), 0)::int + 1 AS next_priority FROM positions",
+      "SELECT COALESCE(MAX(priority), 0)::int + 1 AS next_priority FROM positions WHERE role_id = $1",
+      [roleId],
     );
     const nextPriority = priorityResult.rows[0].next_priority;
 
     const result = await pool.query(
-      `INSERT INTO positions (name, required, priority)
-       VALUES ($1, $2, $3)
+      `INSERT INTO positions (name, required, priority, role_id)
+       VALUES ($1, $2, $3, $4)
        RETURNING id, name, required, priority, created_at, updated_at`,
-      [name, required === null ? true : required, nextPriority],
+      [name, required === null ? true : required, nextPriority, roleId],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -935,6 +1289,9 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "At least one field to update is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `UPDATE positions
@@ -942,9 +1299,9 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
            priority = COALESCE($2, priority),
            required = COALESCE($3, required),
            updated_at = NOW()
-       WHERE id = $4
+       WHERE id = $4 AND role_id = $5
        RETURNING id, name, required, priority, created_at, updated_at`,
-      [name, priority, required, id],
+      [name, priority, required, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -970,12 +1327,16 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "orderedPositionIds is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const existingResult = await client.query(
-      "SELECT id FROM positions ORDER BY priority ASC, id ASC",
+      "SELECT id FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      [roleId],
     );
     const existingIds = existingResult.rows.map((row) => row.id);
 
@@ -1000,7 +1361,8 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
     await client.query("COMMIT");
 
     const updated = await pool.query(
-      "SELECT id, name, required, priority, created_at, updated_at FROM positions ORDER BY priority ASC, id ASC",
+      "SELECT id, name, required, priority, created_at, updated_at FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      [roleId],
     );
     return res.json(updated.rows);
   } catch (error) {
@@ -1011,7 +1373,10 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
   }
 });
 
-app.get("/api/people-positions", requireAuth, async (_req, res) => {
+app.get("/api/people-positions", requireAuth, async (req, res) => {
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT pp.person_id, pp.position_id, pp.rank_order,
@@ -1021,8 +1386,10 @@ app.get("/api/people-positions", requireAuth, async (_req, res) => {
        FROM person_positions pp
        JOIN people p ON p.id = pp.person_id
        JOIN positions pos ON pos.id = pp.position_id
+       WHERE p.role_id = $1
        ORDER BY p.name ASC, pp.rank_order ASC`,
-    );
+      [roleId],
+     );
 
     return res.json(result.rows);
   } catch (error) {
@@ -1036,6 +1403,9 @@ app.get("/api/people/:id/positions", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid person ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT pp.person_id, pp.position_id, pp.rank_order,
@@ -1043,9 +1413,10 @@ app.get("/api/people/:id/positions", requireAuth, async (req, res) => {
               pp.created_at, pp.updated_at
        FROM person_positions pp
        JOIN positions pos ON pos.id = pp.position_id
-       WHERE pp.person_id = $1
+       JOIN people p ON p.id = pp.person_id
+       WHERE pp.person_id = $1 AND p.role_id = $2 AND pos.role_id = $2
        ORDER BY pp.rank_order ASC`,
-      [personId],
+      [personId, roleId],
     );
 
     return res.json(result.rows);
@@ -1060,6 +1431,17 @@ app.post("/api/people/:id/positions", requireAuth, async (req, res) => {
 
   if (!personId || !positionId) {
     return res.status(400).json({ error: "Valid person ID and position ID are required." });
+  }
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePositionInRole(positionId, roleId, res))) {
+    return;
   }
 
   try {
@@ -1099,13 +1481,24 @@ app.put("/api/people/:id/positions/reorder", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid person ID and orderedPositionIds are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
     const existingResult = await client.query(
-      "SELECT position_id FROM person_positions WHERE person_id = $1 ORDER BY rank_order ASC",
-      [personId],
+      `SELECT pp.position_id
+       FROM person_positions pp
+       JOIN positions pos ON pos.id = pp.position_id
+       WHERE pp.person_id = $1 AND pos.role_id = $2
+       ORDER BY pp.rank_order ASC`,
+      [personId, roleId],
     );
     const existingIds = existingResult.rows.map((row) => row.position_id);
 
@@ -1171,6 +1564,17 @@ app.delete("/api/people/:id/positions/:positionId", requireAuth, async (req, res
     return res.status(400).json({ error: "Valid person ID and position ID are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePositionInRole(positionId, roleId, res))) {
+    return;
+  }
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -1218,18 +1622,27 @@ app.delete("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
 
-    const result = await client.query("DELETE FROM positions WHERE id = $1 RETURNING id", [id]);
+    const result = await client.query(
+      "DELETE FROM positions WHERE id = $1 AND role_id = $2 RETURNING id",
+      [id, roleId],
+    );
 
     if (result.rows.length === 0) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Position not found." });
     }
 
-    const remaining = await client.query("SELECT id FROM positions ORDER BY priority ASC, id ASC");
+    const remaining = await client.query(
+      "SELECT id FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      [roleId],
+    );
     for (let index = 0; index < remaining.rows.length; index += 1) {
       await client.query(
         `UPDATE positions
@@ -1254,9 +1667,12 @@ app.delete("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
 app.get("/api/schedule", requireAuth, async (req, res) => {
   const month = normalizeText(req.query.month);
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const values = [];
-    let whereClause = "";
+    const values = [roleId];
+    let whereClause = "WHERE s.role_id = $1";
 
     if (month) {
       const bounds = monthBounds(month);
@@ -1264,7 +1680,7 @@ app.get("/api/schedule", requireAuth, async (req, res) => {
         return res.status(400).json({ error: "Month must be in YYYY-MM format." });
       }
       values.push(bounds.start, bounds.end);
-      whereClause = "WHERE s.track_date BETWEEN $1 AND $2";
+      whereClause += ` AND s.track_date BETWEEN $${values.length - 1} AND $${values.length}`;
     }
 
     const result = await pool.query(
@@ -1305,12 +1721,15 @@ app.get("/api/schedule/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT id, track_date, week_number, created_at, updated_at
        FROM schedule
-       WHERE id = $1`,
-      [id],
+       WHERE id = $1 AND role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -1331,12 +1750,15 @@ app.post("/api/schedule", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid track date and week number (1-5) are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
-      `INSERT INTO schedule (track_date, week_number)
-       VALUES ($1, $2)
+      `INSERT INTO schedule (track_date, week_number, role_id)
+       VALUES ($1, $2, $3)
        RETURNING id, track_date, week_number, created_at, updated_at`,
-      [trackDate, weekNumber],
+      [trackDate, weekNumber, roleId],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -1362,15 +1784,18 @@ app.put("/api/schedule/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID, track date, and week number (1-5) are required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `UPDATE schedule
        SET track_date = $1,
            week_number = $2,
            updated_at = NOW()
-       WHERE id = $3
+       WHERE id = $3 AND role_id = $4
        RETURNING id, track_date, week_number, created_at, updated_at`,
-      [trackDate, weekNumber, id],
+      [trackDate, weekNumber, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -1397,8 +1822,14 @@ app.delete("/api/schedule/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const result = await pool.query("DELETE FROM schedule WHERE id = $1 RETURNING id", [id]);
+    const result = await pool.query(
+      "DELETE FROM schedule WHERE id = $1 AND role_id = $2 RETURNING id",
+      [id, roleId],
+    );
 
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Schedule row not found." });
@@ -1418,12 +1849,15 @@ app.delete("/api/schedule", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Month must be in YYYY-MM format." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `DELETE FROM schedule
-       WHERE track_date BETWEEN $1 AND $2
+       WHERE track_date BETWEEN $1 AND $2 AND role_id = $3
        RETURNING id`,
-      [bounds.start, bounds.end],
+      [bounds.start, bounds.end, roleId],
     );
 
     return res.json({ ok: true, deletedScheduleRows: result.rows.length, month });
@@ -1438,6 +1872,13 @@ app.delete("/api/schedule/:id/assignments", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensureScheduleInRole(id, roleId, res))) {
+    return;
+  }
+
   try {
     await pool.query("DELETE FROM people_schedule WHERE schedule_id = $1", [id]);
     return res.json({ ok: true });
@@ -1449,13 +1890,16 @@ app.delete("/api/schedule/:id/assignments", requireAuth, async (req, res) => {
 app.get("/api/people-schedule", requireAuth, async (req, res) => {
   const scheduleId = parsePositiveInt(req.query.scheduleId);
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
-    const values = [];
-    let whereClause = "";
+    const values = [roleId];
+    let whereClause = "WHERE s.role_id = $1";
 
     if (scheduleId) {
       values.push(scheduleId);
-      whereClause = "WHERE ps.schedule_id = $1";
+      whereClause += ` AND ps.schedule_id = $${values.length}`;
     }
 
     const result = await pool.query(
@@ -1484,6 +1928,9 @@ app.get("/api/people-schedule/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   try {
     const result = await pool.query(
       `SELECT ps.id, ps.schedule_id, ps.person_id, ps.position_id,
@@ -1496,8 +1943,8 @@ app.get("/api/people-schedule/:id", requireAuth, async (req, res) => {
        JOIN schedule s ON s.id = ps.schedule_id
        JOIN people p ON p.id = ps.person_id
        JOIN positions pos ON pos.id = ps.position_id
-       WHERE ps.id = $1`,
-      [id],
+       WHERE ps.id = $1 AND s.role_id = $2`,
+      [id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -1517,6 +1964,21 @@ app.post("/api/people-schedule", requireAuth, async (req, res) => {
 
   if (!scheduleId || !personId || !positionId) {
     return res.status(400).json({ error: "Schedule ID, person ID, and position ID are required." });
+  }
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensureScheduleInRole(scheduleId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePositionInRole(positionId, roleId, res))) {
+    return;
   }
 
   try {
@@ -1549,6 +2011,25 @@ app.put("/api/people-schedule/:id", requireAuth, async (req, res) => {
 
   if (!id || !scheduleId || !personId || !positionId) {
     return res.status(400).json({ error: "Valid ID, schedule ID, person ID, and position ID are required." });
+  }
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensureAssignmentInRole(id, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensureScheduleInRole(scheduleId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePersonInRole(personId, roleId, res))) {
+    return;
+  }
+
+  if (!(await ensurePositionInRole(positionId, roleId, res))) {
+    return;
   }
 
   try {
@@ -1587,6 +2068,13 @@ app.delete("/api/people-schedule/:id", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Valid ID is required." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  if (!(await ensureAssignmentInRole(id, roleId, res))) {
+    return;
+  }
+
   try {
     const result = await pool.query("DELETE FROM people_schedule WHERE id = $1 RETURNING id", [id]);
 
@@ -1613,17 +2101,39 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "No Sundays found for that month." });
   }
 
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
   const client = await pool.connect();
 
   try {
     await client.query("BEGIN");
 
     const [peopleResult, positionsResult, normalWeeksResult, blockedResult, personPositionsResult] = await Promise.all([
-      client.query("SELECT id, name FROM people WHERE include_in_auto_schedule = TRUE ORDER BY id ASC"),
-      client.query("SELECT id, name, required, priority FROM positions ORDER BY priority ASC, id ASC"),
-      client.query("SELECT person_id, week_number FROM normal_weeks"),
-      client.query("SELECT person_id, start_date, end_date FROM blocked_out"),
-      client.query("SELECT person_id, position_id, rank_order FROM person_positions"),
+      client.query("SELECT id, name FROM people WHERE include_in_auto_schedule = TRUE AND role_id = $1 ORDER BY id ASC", [roleId]),
+      client.query("SELECT id, name, required, priority FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC", [roleId]),
+      client.query(
+        `SELECT nw.person_id, nw.week_number
+         FROM normal_weeks nw
+         JOIN people p ON p.id = nw.person_id
+         WHERE p.role_id = $1`,
+        [roleId],
+      ),
+      client.query(
+        `SELECT b.person_id, b.start_date, b.end_date
+         FROM blocked_out b
+         JOIN people p ON p.id = b.person_id
+         WHERE p.role_id = $1`,
+        [roleId],
+      ),
+      client.query(
+        `SELECT pp.person_id, pp.position_id, pp.rank_order
+         FROM person_positions pp
+         JOIN people p ON p.id = pp.person_id
+         JOIN positions pos ON pos.id = pp.position_id
+         WHERE p.role_id = $1 AND pos.role_id = $1`,
+        [roleId],
+      ),
     ]);
 
     const people = peopleResult.rows;
@@ -1661,8 +2171,8 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     const existingSchedulesResult = await client.query(
       `SELECT id, track_date, week_number
        FROM schedule
-       WHERE track_date BETWEEN $1 AND $2`,
-      [bounds.start, bounds.end],
+       WHERE track_date BETWEEN $1 AND $2 AND role_id = $3`,
+      [bounds.start, bounds.end, roleId],
     );
 
     const scheduleByDate = new Map();
@@ -1673,11 +2183,11 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     for (const date of sundayDates) {
       if (!scheduleByDate.has(date)) {
         const insertResult = await client.query(
-          `INSERT INTO schedule (track_date, week_number)
-           VALUES ($1, $2)
-           ON CONFLICT (track_date) DO UPDATE SET week_number = EXCLUDED.week_number
+          `INSERT INTO schedule (track_date, week_number, role_id)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (track_date, role_id) DO UPDATE SET week_number = EXCLUDED.week_number
            RETURNING id, track_date, week_number`,
-          [date, weekNumberFromSunday(date)],
+          [date, weekNumberFromSunday(date), roleId],
         );
         scheduleByDate.set(date, insertResult.rows[0]);
       }

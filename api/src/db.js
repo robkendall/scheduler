@@ -43,6 +43,30 @@ async function initializeSchema() {
     $$;
   `);
 
+  // --- Roles ---
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS roles (
+      id SERIAL PRIMARY KEY,
+      name TEXT UNIQUE NOT NULL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_roles (
+      user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      role_id INTEGER NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+      PRIMARY KEY (user_id, role_id)
+    );
+  `);
+
+  await pool.query(`
+    INSERT INTO roles (name)
+    VALUES ('Production'), ('Kids'), ('Worship')
+    ON CONFLICT (name) DO NOTHING;
+  `);
+
   await pool.query(`
     CREATE TABLE IF NOT EXISTS people (
       id SERIAL PRIMARY KEY,
@@ -54,6 +78,7 @@ async function initializeSchema() {
   `);
 
   await ensureColumn("people", "include_in_auto_schedule", "BOOLEAN NOT NULL DEFAULT TRUE");
+  await ensureColumn("people", "role_id", "INTEGER REFERENCES roles(id) ON DELETE CASCADE");
 
   await pool.query(`
     UPDATE people
@@ -96,7 +121,7 @@ async function initializeSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS positions (
       id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL UNIQUE,
+      name TEXT NOT NULL,
       required BOOLEAN NOT NULL DEFAULT TRUE,
       priority INTEGER NOT NULL CHECK (priority >= 1),
       created_at TIMESTAMP DEFAULT NOW(),
@@ -105,6 +130,14 @@ async function initializeSchema() {
   `);
 
   await ensureColumn("positions", "required", "BOOLEAN NOT NULL DEFAULT TRUE");
+  await ensureColumn("positions", "role_id", "INTEGER REFERENCES roles(id) ON DELETE CASCADE");
+
+  // Replace global positions name unique with per-role unique
+  await pool.query(`ALTER TABLE positions DROP CONSTRAINT IF EXISTS positions_name_key`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS positions_name_role_idx
+    ON positions(name, role_id);
+  `);
 
   await pool.query(`
     UPDATE positions
@@ -141,11 +174,42 @@ async function initializeSchema() {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS schedule (
       id SERIAL PRIMARY KEY,
-      track_date DATE NOT NULL UNIQUE,
+      track_date DATE NOT NULL,
       week_number INTEGER NOT NULL CHECK (week_number BETWEEN 1 AND 5),
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW()
     );
+  `);
+
+  await ensureColumn("schedule", "role_id", "INTEGER REFERENCES roles(id) ON DELETE CASCADE");
+
+  await pool.query(`
+    UPDATE people
+    SET role_id = (SELECT id FROM roles WHERE name = 'Production' LIMIT 1)
+    WHERE role_id IS NULL;
+  `);
+
+  await pool.query(`
+    UPDATE positions
+    SET role_id = (SELECT id FROM roles WHERE name = 'Production' LIMIT 1)
+    WHERE role_id IS NULL;
+  `);
+
+  await pool.query(`
+    UPDATE schedule
+    SET role_id = (SELECT id FROM roles WHERE name = 'Production' LIMIT 1)
+    WHERE role_id IS NULL;
+  `);
+
+  await pool.query(`ALTER TABLE people ALTER COLUMN role_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE positions ALTER COLUMN role_id SET NOT NULL`);
+  await pool.query(`ALTER TABLE schedule ALTER COLUMN role_id SET NOT NULL`);
+
+  // Replace global track_date unique with per-role unique
+  await pool.query(`ALTER TABLE schedule DROP CONSTRAINT IF EXISTS schedule_track_date_key`);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS schedule_track_date_role_idx
+    ON schedule(track_date, role_id);
   `);
 
   await pool.query(`
@@ -198,6 +262,24 @@ async function initializeSchema() {
   await pool.query(`
     CREATE INDEX IF NOT EXISTS "IDX_session_expire" ON "session" ("expire");
   `);
+
+  // Scheduler auth uses username/password; tolerate stray deacons columns.
+  await ensureColumn("users", "username", "TEXT");
+  await ensureColumn("users", "email", "TEXT");
+  await ensureColumn("users", "name", "TEXT NOT NULL DEFAULT ''");
+  await ensureColumn("users", "type", "TEXT NOT NULL DEFAULT 'Other'");
+
+  // Backfill missing usernames from email (or a deterministic fallback) so login works.
+  await pool.query(`
+    UPDATE users
+    SET username = COALESCE(NULLIF(SPLIT_PART(email, '@', 1), ''), CONCAT('user', id))
+    WHERE username IS NULL OR username = ''
+  `);
+
+  await pool.query(`ALTER TABLE users ALTER COLUMN username SET NOT NULL`);
+
+  // Email should be optional in scheduler because user APIs only manage username.
+  await pool.query(`ALTER TABLE users ALTER COLUMN email DROP NOT NULL`);
 
   const seedPasswordHash = await bcrypt.hash("asdf", 10);
 

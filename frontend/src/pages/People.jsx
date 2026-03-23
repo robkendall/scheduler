@@ -40,7 +40,7 @@ const EMPTY_DRAFT = {
     positionIds: [],
 };
 
-function People() {
+function People({ activeRoleId, user }) {
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
@@ -59,18 +59,29 @@ function People() {
     const [positionInput, setPositionInput] = useState("");
     const [dragIndex, setDragIndex] = useState(null);
     const panelRef = useRef(null);
+    const activeRoleName = user?.roles?.find((role) => role.id === activeRoleId)?.name || "Role";
 
     async function loadData() {
+        if (!activeRoleId) {
+            setPeople([]);
+            setNormalWeeks([]);
+            setBlockedOut([]);
+            setPositions([]);
+            setPeoplePositions([]);
+            setLoading(false);
+            return null;
+        }
+
         setLoading(true);
         setError("");
 
         try {
             const [peopleData, normalData, blockedData, positionsData, peoplePositionsData] = await Promise.all([
-                getPeople(),
-                getNormalWeeks(),
-                getBlockedOut(),
-                getPositions(),
-                getPeoplePositions(),
+                getPeople(activeRoleId),
+                getNormalWeeks(activeRoleId),
+                getBlockedOut(activeRoleId),
+                getPositions(activeRoleId),
+                getPeoplePositions(activeRoleId),
             ]);
 
             setPeople(peopleData);
@@ -96,7 +107,7 @@ function People() {
 
     useEffect(() => {
         loadData();
-    }, []);
+    }, [activeRoleId]);
 
     function beginNewDraft() {
         setIsNewDraft(true);
@@ -301,10 +312,10 @@ function People() {
         const weeksToAdd = desiredWeeks.filter((week) => !existingWeeks.some((item) => item.week_number === week));
 
         for (const item of weeksToDelete) {
-            await deleteNormalWeek(item.id);
+            await deleteNormalWeek(item.id, activeRoleId);
         }
         for (const week of weeksToAdd) {
-            await createNormalWeek({ personId, weekNumber: week });
+            await createNormalWeek({ personId, weekNumber: week }, activeRoleId);
         }
 
         const existingBlockedIdsKept = new Set(
@@ -312,7 +323,7 @@ function People() {
         );
         const blockedToDelete = existingBlocked.filter((item) => !existingBlockedIdsKept.has(item.id));
         for (const item of blockedToDelete) {
-            await deleteBlockedOut(item.id);
+            await deleteBlockedOut(item.id, activeRoleId);
         }
 
         const blockedToAdd = draft.blockedOut.filter((item) => !item.id);
@@ -321,7 +332,7 @@ function People() {
                 personId,
                 startDate: item.startDate,
                 endDate: item.endDate,
-            });
+            }, activeRoleId);
         }
 
         const desiredPositionIds = draft.positionIds;
@@ -329,13 +340,13 @@ function People() {
         const positionsToAdd = desiredPositionIds.filter((id) => !existingPositionIds.includes(id));
 
         for (const positionId of positionsToRemove) {
-            await removePersonPosition(personId, positionId);
+            await removePersonPosition(personId, positionId, activeRoleId);
         }
         for (const positionId of positionsToAdd) {
-            await addPersonPosition(personId, positionId);
+            await addPersonPosition(personId, positionId, activeRoleId);
         }
         if (desiredPositionIds.length > 0) {
-            await reorderPersonPositions(personId, desiredPositionIds);
+            await reorderPersonPositions(personId, desiredPositionIds, activeRoleId);
         }
     }
 
@@ -354,7 +365,7 @@ function People() {
                 const created = await createPerson({
                     name: draft.name,
                     includeInAutoSchedule: Boolean(draft.includeInAutoSchedule),
-                });
+                }, activeRoleId);
 
                 await syncRelatedData(created.id, [], [], []);
                 const refreshedData = await loadData();
@@ -371,7 +382,7 @@ function People() {
                 await updatePerson(personId, {
                     name: draft.name,
                     includeInAutoSchedule: Boolean(draft.includeInAutoSchedule),
-                });
+                }, activeRoleId);
 
                 await syncRelatedData(personId, existingWeeks, existingBlocked, existingPositionIds);
                 const refreshedData = await loadData();
@@ -391,7 +402,7 @@ function People() {
 
         setError("");
         try {
-            await deletePerson(selectedPersonId);
+            await deletePerson(selectedPersonId, activeRoleId);
             await loadData();
             beginNewDraft();
         } catch (requestError) {
@@ -402,9 +413,10 @@ function People() {
     return (
         <PageShell
             eyebrow="Configuration"
-            title="People"
-            description="Add or edit one person at a time, including normal weeks, blocked dates, and position ranking."
+            title={`${activeRoleName} People`}
+            description={`Add or edit one person at a time for ${user?.roles?.find((role) => role.id === activeRoleId)?.name || "the selected role"}.`}
         >
+            {!activeRoleId ? <Alert severity="warning" sx={{ mb: 2 }}>No role is selected for this account.</Alert> : null}
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
             {loading ? <Typography sx={{ mb: 2 }}>Loading configuration...</Typography> : null}
 

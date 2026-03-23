@@ -41,7 +41,7 @@ function shiftMonthValue(monthValue, delta) {
     return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
 }
 
-function Dashboard({ user }) {
+function Dashboard({ activeRoleId, onRoleChange, user }) {
     const [month, setMonth] = useState(currentMonthText());
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
@@ -58,6 +58,7 @@ function Dashboard({ user }) {
     const [positions, setPositions] = useState([]);
     const [prepopulateResult, setPrepopulateResult] = useState(null);
     const [addForms, setAddForms] = useState({});
+    const activeRoleName = user?.roles?.find((role) => role.id === activeRoleId)?.name || "Role";
 
     const [prepopulateConfirm, setPrepopulateConfirm] = useState(false);
 
@@ -108,18 +109,30 @@ function Dashboard({ user }) {
     }, [peoplePositions]);
 
     const loadAll = useCallback(async () => {
+        if (!activeRoleId) {
+            setDashboard(null);
+            setSchedule([]);
+            setPeople([]);
+            setPeoplePositions([]);
+            setNormalWeeks([]);
+            setBlockedOut([]);
+            setPositions([]);
+            setLoading(false);
+            return;
+        }
+
         setLoading(true);
         setError("");
 
         try {
             const [dashboardData, scheduleData, peopleData, peoplePositionsData, normalWeeksData, blockedOutData, positionsData] = await Promise.all([
-                getDashboard(),
-                getSchedule(month),
-                getPeople(),
-                getPeoplePositions(),
-                getNormalWeeks(),
-                getBlockedOut(),
-                getPositions(),
+                getDashboard(activeRoleId),
+                getSchedule(month, activeRoleId),
+                getPeople(activeRoleId),
+                getPeoplePositions(activeRoleId),
+                getNormalWeeks(activeRoleId),
+                getBlockedOut(activeRoleId),
+                getPositions(activeRoleId),
             ]);
 
             setDashboard(dashboardData);
@@ -134,7 +147,7 @@ function Dashboard({ user }) {
         } finally {
             setLoading(false);
         }
-    }, [month]);
+    }, [activeRoleId, month]);
 
     useEffect(() => {
         loadAll();
@@ -151,7 +164,7 @@ function Dashboard({ user }) {
         setPrepopulateResult(null);
 
         try {
-            const result = await prepopulateSchedule(month);
+            const result = await prepopulateSchedule(month, activeRoleId);
             setPrepopulateResult(result);
             await loadAll();
         } catch (requestError) {
@@ -169,7 +182,7 @@ function Dashboard({ user }) {
                 scheduleId,
                 personId: Number(newPersonId),
                 positionId: assignment.positionId,
-            });
+            }, activeRoleId);
             await loadAll();
         } catch (requestError) {
             setError(requestError.message);
@@ -182,7 +195,7 @@ function Dashboard({ user }) {
         setMutating(true);
         setError("");
         try {
-            await deletePeopleSchedule(assignmentId);
+            await deletePeopleSchedule(assignmentId, activeRoleId);
             await loadAll();
         } catch (requestError) {
             setError(requestError.message);
@@ -196,7 +209,7 @@ function Dashboard({ user }) {
         setError("");
         setClearConfirmId(null);
         try {
-            await clearScheduleAssignments(scheduleId);
+            await clearScheduleAssignments(scheduleId, activeRoleId);
             await loadAll();
         } catch (requestError) {
             setError(requestError.message);
@@ -212,7 +225,7 @@ function Dashboard({ user }) {
         setClearMonthConfirm(false);
 
         try {
-            await clearScheduleMonth(month);
+            await clearScheduleMonth(month, activeRoleId);
             await loadAll();
         } catch (requestError) {
             setError(requestError.message);
@@ -242,7 +255,7 @@ function Dashboard({ user }) {
                 scheduleId,
                 personId: Number(form.personId),
                 positionId: Number(form.positionId),
-            });
+            }, activeRoleId);
             setAddForms((prev) => ({ ...prev, [scheduleId]: { personId: "", positionId: "" } }));
             await loadAll();
         } catch (requestError) {
@@ -254,11 +267,12 @@ function Dashboard({ user }) {
 
     return (
         <PageShell
-            eyebrow="Overview"
-            title="Scheduler Dashboard"
-            description={`Signed in as ${user?.username || "unknown"}. This page drives month generation and schedule visibility.`}
+            eyebrow="Calendar"
+            title={`${activeRoleName} Calendar`}
+            description={`Signed in as ${user?.username || "unknown"}. This calendar is isolated to the selected role.`}
         >
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
+            {!activeRoleId ? <Alert severity="warning" sx={{ mb: 2 }}>No role is selected for this account.</Alert> : null}
             {prepopulateResult ? (
                 <Alert severity="success" sx={{ mb: 2 }}>
                     Created {prepopulateResult.assignmentsCreated} assignments for {prepopulateResult.month}.

@@ -10,21 +10,16 @@ import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import useMediaQuery from "@mui/material/useMediaQuery";
 import AdminPanelSettingsRoundedIcon from "@mui/icons-material/AdminPanelSettingsRounded";
+import CalendarMonthRoundedIcon from "@mui/icons-material/CalendarMonthRounded";
 import DashboardRoundedIcon from "@mui/icons-material/DashboardRounded";
 import GroupRoundedIcon from "@mui/icons-material/GroupRounded";
 import LogoutRoundedIcon from "@mui/icons-material/LogoutRounded";
 import MenuRoundedIcon from "@mui/icons-material/MenuRounded";
 import PersonRoundedIcon from "@mui/icons-material/PersonRounded";
+import SecurityRoundedIcon from "@mui/icons-material/SecurityRounded";
 import ViewInArRoundedIcon from "@mui/icons-material/ViewInArRounded";
 import { useState } from "react";
 import { Link as RouterLink, useLocation } from "react-router-dom";
-
-const pageLinks = [
-    { icon: <DashboardRoundedIcon />, label: "Dashboard", to: "/" },
-    { icon: <GroupRoundedIcon />, label: "People", to: "/people" },
-    { icon: <ViewInArRoundedIcon />, label: "Positions", to: "/positions" },
-    { icon: <AdminPanelSettingsRoundedIcon />, label: "Auth Users", to: "/users" },
-];
 
 const accountLinks = [
     { icon: <PersonRoundedIcon />, label: "Profile", to: "/profile" },
@@ -41,6 +36,14 @@ function Navigation({ user }) {
 
     const isExpanded = useTemporaryDrawer ? true : expanded;
     const showSidebarHeaderMenuIcon = !useTemporaryDrawer;
+    const pageLinks = [
+        { icon: <DashboardRoundedIcon />, label: "Dashboard", to: "/" },
+        { icon: <CalendarMonthRoundedIcon />, label: "Calendar", to: "/calendar" },
+        { icon: <GroupRoundedIcon />, label: "People", to: "/people" },
+        { icon: <ViewInArRoundedIcon />, label: "Positions", to: "/positions" },
+        ...(user?.isAdmin ? [{ icon: <SecurityRoundedIcon />, label: "Roles", to: "/roles" }] : []),
+        ...(user?.isAdmin ? [{ icon: <AdminPanelSettingsRoundedIcon />, label: "Auth Users", to: "/users" }] : []),
+    ];
 
     function handleNavigate() {
         if (useTemporaryDrawer) {
