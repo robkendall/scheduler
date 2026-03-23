@@ -314,13 +314,13 @@ app.get("/api/me", async (req, res) => {
     const rolesResult = user.is_admin
       ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
       : await pool.query(
-          `SELECT r.id, r.name
+        `SELECT r.id, r.name
            FROM roles r
            JOIN user_roles ur ON ur.role_id = r.id
            WHERE ur.user_id = $1
            ORDER BY r.name ASC`,
-          [user.id],
-        );
+        [user.id],
+      );
 
     return res.json({
       user: {
@@ -366,13 +366,13 @@ app.post("/api/login", async (req, res) => {
     const rolesResult = user.is_admin
       ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
       : await pool.query(
-          `SELECT r.id, r.name
+        `SELECT r.id, r.name
            FROM roles r
            JOIN user_roles ur ON ur.role_id = r.id
            WHERE ur.user_id = $1
            ORDER BY r.name ASC`,
-          [user.id],
-        );
+        [user.id],
+      );
 
     return res.json({
       user: {
@@ -1357,7 +1357,7 @@ app.get("/api/people-positions", requireAuth, async (req, res) => {
        WHERE p.role_id = $1
        ORDER BY p.name ASC, pp.rank_order ASC`,
       [roleId],
-     );
+    );
 
     return res.json(result.rows);
   } catch (error) {
