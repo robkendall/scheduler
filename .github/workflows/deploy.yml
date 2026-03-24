@@ -1,0 +1,27 @@
+name: Deploy Render
+
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types:
+      - completed
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main')
+    steps:
+      - name: Trigger Render API deploy
+        run: |
+          curl -fsSL -X POST "${{ secrets.RENDER_API_DEPLOY_HOOK_URL }}"
+
+      - name: Trigger Render Frontend deploy
+        run: |
+          curl -fsSL -X POST "${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK_URL }}"
