@@ -29,8 +29,11 @@ function DashboardHome({ activeRoleId, onRoleChange, user }) {
         }
 
         let active = true;
-        setLoading(true);
-        setError("");
+        // Defer setState to avoid cascading renders
+        Promise.resolve().then(() => {
+            setLoading(true);
+            setError("");
+        });
 
         getDashboard(activeRoleId)
             .then((data) => {
