@@ -216,7 +216,8 @@ function App() {
         const hasStoredRole = user.roles.some((role) => role.id === storedRoleId);
         const nextRoleId = hasStoredRole ? storedRoleId : user.roles[0].id;
 
-        setActiveRoleId(nextRoleId);
+        // Defer setState to avoid cascading renders
+        Promise.resolve().then(() => setActiveRoleId(nextRoleId));
         writeStoredRoleId(user.id, nextRoleId);
     }, [activeRoleId, user]);
 
