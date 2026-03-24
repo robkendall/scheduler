@@ -20,8 +20,11 @@ function DashboardHome({ activeRoleId, onRoleChange, user }) {
 
     useEffect(() => {
         if (!activeRoleId) {
-            setDashboard(null);
-            setLoading(false);
+            // Defer setState to avoid cascading renders
+            Promise.resolve().then(() => {
+                setDashboard(null);
+                setLoading(false);
+            });
             return;
         }
 
