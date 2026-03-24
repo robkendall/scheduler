@@ -50,8 +50,6 @@ jobs:
 
       - name: Lint
         run: npm run lint
-        env:
-          ESLINT_NO_DEV_ERRORS: true
 
       - name: Build
         run: npm run build
