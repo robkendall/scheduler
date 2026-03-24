@@ -71,6 +71,28 @@ export function getRoles() {
   return request("/api/roles");
 }
 
+export function getPlanningCenterHealth() {
+  return request("/api/planning-center/health");
+}
+
+export function getPlanningCenterTeams() {
+  return request("/api/planning-center/teams");
+}
+
+export function getPlanningCenterTeamMembers(teamId) {
+  return request(`/api/planning-center/teams/${encodeURIComponent(teamId)}/members`);
+}
+
+export function getPlanningCenterServiceTypes() {
+  return request("/api/planning-center/service-types");
+}
+
+export function importPlanningCenterRole(roleId) {
+  return request(`/api/roles/${roleId}/import-planning-center`, {
+    method: "POST",
+  });
+}
+
 export function createRole(payload) {
   return request("/api/roles", {
     method: "POST",
@@ -188,6 +210,17 @@ export function reorderPositions(orderedPositionIds, roleId) {
 export function deletePosition(id, roleId) {
   return request(buildRoleQuery(`/api/positions/${id}`, roleId), {
     method: "DELETE",
+  });
+}
+
+export function getPositionPeopleOrder(id, roleId) {
+  return request(buildRoleQuery(`/api/positions/${id}/people-order`, roleId));
+}
+
+export function savePositionPeopleOrder(id, items, roleId) {
+  return request(buildRoleQuery(`/api/positions/${id}/people-order`, roleId), {
+    method: "PUT",
+    body: JSON.stringify(withRole({ items }, roleId)),
   });
 }
 

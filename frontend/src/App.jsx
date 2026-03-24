@@ -17,11 +17,40 @@ import Dashboard from "./pages/Dashboard";
 import Login from "./pages/Login";
 import Logout from "./pages/Logout";
 import People from "./pages/People";
+import PlanningCenterAdmin from "./pages/PlanningCenterAdmin";
 import Positions from "./pages/Positions";
 import Roles from "./pages/Roles";
 import UserProfile from "./pages/UserProfile";
 import UsersManagement from "./pages/UsersManagement";
 import "./App.css";
+
+const ACTIVE_ROLE_STORAGE_KEY_PREFIX = "scheduler.activeRoleId.user";
+
+function roleStorageKeyForUser(userId) {
+    return `${ACTIVE_ROLE_STORAGE_KEY_PREFIX}.${userId}`;
+}
+
+function readStoredRoleId(userId) {
+    if (!userId || typeof window === "undefined") {
+        return null;
+    }
+
+    const raw = window.localStorage.getItem(roleStorageKeyForUser(userId));
+    const parsed = Number(raw);
+    if (!Number.isInteger(parsed) || parsed <= 0) {
+        return null;
+    }
+
+    return parsed;
+}
+
+function writeStoredRoleId(userId, roleId) {
+    if (!userId || !roleId || typeof window === "undefined") {
+        return;
+    }
+
+    window.localStorage.setItem(roleStorageKeyForUser(userId), String(roleId));
+}
 
 const theme = createTheme({
     palette: {
@@ -111,6 +140,17 @@ function AppRoutes({ activeRoleId, authLoading, onLoggedOut, onRoleChange, onUse
                 }
             />
             <Route
+                path="/admin"
+                element={
+                    <RequireAuth authLoading={authLoading} user={user}>
+                        <RequireAdmin user={user}>
+                            <PlanningCenterAdmin />
+                        </RequireAdmin>
+                    </RequireAuth>
+                }
+            />
+            <Route path="/planning-center" element={<Navigate to="/admin" replace />} />
+            <Route
                 path="/positions"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
@@ -167,10 +207,17 @@ function App() {
         }
 
         const hasCurrentRole = user.roles.some((role) => role.id === activeRoleId);
-        if (!hasCurrentRole) {
-            // Defer setState to avoid cascading renders
-            Promise.resolve().then(() => setActiveRoleId(user.roles[0].id));
+        if (hasCurrentRole) {
+            writeStoredRoleId(user.id, activeRoleId);
+            return;
         }
+
+        const storedRoleId = readStoredRoleId(user.id);
+        const hasStoredRole = user.roles.some((role) => role.id === storedRoleId);
+        const nextRoleId = hasStoredRole ? storedRoleId : user.roles[0].id;
+
+        setActiveRoleId(nextRoleId);
+        writeStoredRoleId(user.id, nextRoleId);
     }, [activeRoleId, user]);
 
     return (

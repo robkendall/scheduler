@@ -27,20 +27,12 @@ services:
         sync: false
       - key: CORS_ORIGIN
         sync: false
-      - key: SMTP_HOST
+      - key: PCO_APP_ID
         sync: false
-      - key: SMTP_PORT
-        value: 587
-      - key: SMTP_USER
+      - key: PCO_SECRET
         sync: false
-      - key: SMTP_PASS
+      - key: PCO_AUTH_TOKEN
         sync: false
-      - key: SMTP_FROM
-        sync: false
-      - key: SMTP_SECURE
-        value: "false"
-      - key: EMAIL_CHECK_INTERVAL_MS
-        value: 60000
 
   - type: web
     name: cg-scheduler

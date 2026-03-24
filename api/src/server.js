@@ -6,6 +6,7 @@ const session = require("express-session");
 const pgSession = require("connect-pg-simple")(session);
 
 const pool = require("./db");
+const { makePlanningCenterClient } = require("./planningCenter");
 const requireAuth = require("./middleware/auth");
 
 const app = express();
@@ -65,6 +66,41 @@ app.use(
 
 function normalizeText(value) {
   return String(value || "").trim();
+}
+
+function normalizeOptionalText(value) {
+  const text = normalizeText(value);
+  return text || null;
+}
+
+function parseRoleExternalMapping(payload) {
+  const hasExternalSource = Object.prototype.hasOwnProperty.call(payload || {}, "externalSource");
+  const hasExternalRoleKind = Object.prototype.hasOwnProperty.call(payload || {}, "externalRoleKind");
+  const hasExternalRoleId = Object.prototype.hasOwnProperty.call(payload || {}, "externalRoleId");
+  const externalFieldsProvided = hasExternalSource || hasExternalRoleKind || hasExternalRoleId;
+
+  const externalSource = normalizeOptionalText(payload.externalSource)?.toLowerCase() || null;
+  const externalRoleKind = normalizeOptionalText(payload.externalRoleKind)?.toLowerCase() || null;
+  const externalRoleId = normalizeOptionalText(payload.externalRoleId) || null;
+
+  const providedCount = [hasExternalSource, hasExternalRoleKind, hasExternalRoleId].filter(Boolean).length;
+  if (providedCount !== 0 && providedCount !== 3) {
+    throw new Error("externalSource, externalRoleKind, and externalRoleId must be provided together.");
+  }
+
+  if (providedCount === 3) {
+    const populatedCount = [externalSource, externalRoleKind, externalRoleId].filter(Boolean).length;
+    if (populatedCount !== 3) {
+      throw new Error("externalSource, externalRoleKind, and externalRoleId cannot be blank.");
+    }
+  }
+
+  return {
+    externalFieldsProvided,
+    externalSource,
+    externalRoleKind,
+    externalRoleId,
+  };
 }
 
 function normalizeDate(value) {
@@ -234,7 +270,7 @@ async function ensurePersonInRole(personId, roleId, res) {
 
 async function ensurePositionInRole(positionId, roleId, res) {
   const ok = await hasRoleScopedRecord(
-    "SELECT 1 FROM positions WHERE id = $1 AND role_id = $2",
+    "SELECT 1 FROM positions WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE",
     [positionId, roleId],
   );
 
@@ -405,7 +441,7 @@ app.get("/api/dashboard", requireAuth, async (req, res) => {
   try {
     const [peopleCount, positionCount, scheduleCount, nextEntries] = await Promise.all([
       pool.query("SELECT COUNT(*)::int AS count FROM people WHERE role_id = $1", [roleId]),
-      pool.query("SELECT COUNT(*)::int AS count FROM positions WHERE role_id = $1", [roleId]),
+      pool.query("SELECT COUNT(*)::int AS count FROM positions WHERE role_id = $1 AND soft_deleted = FALSE", [roleId]),
       pool.query("SELECT COUNT(*)::int AS count FROM schedule WHERE role_id = $1", [roleId]),
       pool.query(
         `SELECT s.id, s.track_date, s.week_number,
@@ -575,11 +611,70 @@ app.delete("/api/users/:id", requireAdmin, async (req, res) => {
   }
 });
 
+// --- Planning Center admin ---
+
+function getPlanningCenterClient() {
+  return makePlanningCenterClient({
+    appId: process.env.PCO_APP_ID || process.env.PCO_CLIENT_ID,
+    secret: process.env.PCO_SECRET || process.env.PCO_CLIENT_SECRET,
+    authToken: process.env.PCO_AUTH_TOKEN,
+  });
+}
+
+app.get("/api/planning-center/health", requireAdmin, async (_req, res) => {
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    const health = await planningCenterClient.getConnectionHealth();
+    return res.json(health);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/planning-center/teams", requireAdmin, async (_req, res) => {
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    const teams = await planningCenterClient.listTeams();
+    return res.json(teams);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/planning-center/service-types", requireAdmin, async (_req, res) => {
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    const serviceTypes = await planningCenterClient.listServiceTypes();
+    return res.json(serviceTypes);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
+app.get("/api/planning-center/teams/:teamId/members", requireAdmin, async (req, res) => {
+  const teamId = normalizeText(req.params.teamId);
+  if (!teamId) {
+    return res.status(400).json({ error: "Team ID is required." });
+  }
+
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    const members = await planningCenterClient.listTeamMembers(teamId);
+    return res.json(members);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+});
+
 // --- Roles ---
 
 app.get("/api/roles", requireAdmin, async (_req, res) => {
   try {
-    const result = await pool.query("SELECT id, name, created_at FROM roles ORDER BY name ASC");
+    const result = await pool.query(
+      `SELECT id, name, created_at, external_source, external_role_kind, external_role_id
+       FROM roles
+       ORDER BY name ASC`,
+    );
     return res.json(result.rows);
   } catch (error) {
     return handleServerError(res, "Failed to load roles", error);
@@ -592,15 +687,24 @@ app.post("/api/roles", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: "Name is required." });
   }
 
+  let mapping;
+  try {
+    mapping = parseRoleExternalMapping(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
   try {
     const result = await pool.query(
-      "INSERT INTO roles (name) VALUES ($1) RETURNING id, name, created_at",
-      [name],
+      `INSERT INTO roles (name, external_source, external_role_kind, external_role_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id`,
+      [name, mapping.externalSource, mapping.externalRoleKind, mapping.externalRoleId],
     );
     return res.status(201).json(result.rows[0]);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({ error: "Role name already exists." });
+      return res.status(409).json({ error: "Role name or external mapping already exists." });
     }
     return handleServerError(res, "Failed to create role", error);
   }
@@ -613,10 +717,30 @@ app.put("/api/roles/:id", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: "Valid ID and name are required." });
   }
 
+  let mapping;
+  try {
+    mapping = parseRoleExternalMapping(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
   try {
     const result = await pool.query(
-      "UPDATE roles SET name = $1 WHERE id = $2 RETURNING id, name, created_at",
-      [name, id],
+      `UPDATE roles
+       SET name = $1,
+           external_source = CASE WHEN $2 THEN $3 ELSE external_source END,
+           external_role_kind = CASE WHEN $2 THEN $4 ELSE external_role_kind END,
+           external_role_id = CASE WHEN $2 THEN $5 ELSE external_role_id END
+       WHERE id = $6
+       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id`,
+      [
+        name,
+        mapping.externalFieldsProvided,
+        mapping.externalSource,
+        mapping.externalRoleKind,
+        mapping.externalRoleId,
+        id,
+      ],
     );
     if (result.rows.length === 0) {
       return res.status(404).json({ error: "Role not found." });
@@ -624,9 +748,332 @@ app.put("/api/roles/:id", requireAdmin, async (req, res) => {
     return res.json(result.rows[0]);
   } catch (error) {
     if (error.code === "23505") {
-      return res.status(409).json({ error: "Role name already exists." });
+      return res.status(409).json({ error: "Role name or external mapping already exists." });
     }
     return handleServerError(res, "Failed to update role", error);
+  }
+});
+
+app.post("/api/roles/:id/import-planning-center", requireAdmin, async (req, res) => {
+  const roleId = parsePositiveInt(req.params.id);
+  if (!roleId) {
+    return res.status(400).json({ error: "Valid role ID is required." });
+  }
+
+  let role;
+  try {
+    const roleResult = await pool.query(
+      `SELECT id, name, external_source, external_role_kind, external_role_id
+       FROM roles
+       WHERE id = $1`,
+      [roleId],
+    );
+    role = roleResult.rows[0];
+  } catch (error) {
+    return handleServerError(res, "Failed to load role mapping", error);
+  }
+
+  if (!role) {
+    return res.status(404).json({ error: "Role not found." });
+  }
+
+  if (role.external_source !== "planning_center" || role.external_role_kind !== "services_team" || !role.external_role_id) {
+    return res.status(400).json({
+      error: "Role must be mapped to Planning Center Services Team (externalSource=planning_center, externalRoleKind=services_team, externalRoleId=<team id>).",
+    });
+  }
+
+  let bundle;
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    bundle = await planningCenterClient.loadTeamBundle(role.external_role_id);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const nextPriorityResult = await client.query(
+      "SELECT COALESCE(MAX(priority), 0)::int + 1 AS next_priority FROM positions WHERE role_id = $1 AND soft_deleted = FALSE",
+      [role.id],
+    );
+    let nextImportedPriority = nextPriorityResult.rows[0].next_priority;
+
+    const localPositionIdByExternal = new Map();
+    for (const position of bundle.positions) {
+      const result = await client.query(
+        `WITH upserted AS (
+           INSERT INTO positions (
+           name,
+           required,
+           priority,
+           role_id,
+           external_source,
+           external_position_id,
+           updated_at
+         )
+         VALUES ($1, TRUE, $4, $2, 'planning_center', $3, NOW())
+         ON CONFLICT (role_id, external_source, external_position_id)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           updated_at = NOW()
+         WHERE positions.soft_deleted = FALSE
+           AND positions.ignore_import = FALSE
+         RETURNING id
+         )
+         SELECT id FROM upserted
+         UNION ALL
+         SELECT p.id
+         FROM positions p
+         WHERE p.role_id = $2
+           AND p.external_source = 'planning_center'
+           AND p.external_position_id = $3
+           AND p.soft_deleted = FALSE
+           AND p.ignore_import = FALSE
+         LIMIT 1`,
+        [position.name, role.id, position.id, nextImportedPriority],
+      );
+
+      if (result.rows.length > 0) {
+        localPositionIdByExternal.set(position.id, result.rows[0].id);
+      }
+
+      nextImportedPriority += 1;
+    }
+
+    const localPersonIdByExternal = new Map();
+    for (const person of bundle.people) {
+      const result = await client.query(
+        `INSERT INTO people (
+           name,
+           include_in_auto_schedule,
+           role_id,
+           external_source,
+           external_person_id,
+           updated_at
+         )
+         VALUES ($1, TRUE, $2, 'planning_center', $3, NOW())
+         ON CONFLICT (role_id, external_source, external_person_id)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           updated_at = NOW()
+         RETURNING id`,
+        [person.name, role.id, person.id],
+      );
+
+      localPersonIdByExternal.set(person.id, result.rows[0].id);
+    }
+
+    const localPositionIdByName = new Map();
+    for (const position of bundle.positions) {
+      const localPositionId = localPositionIdByExternal.get(position.id);
+      if (!localPositionId) {
+        continue;
+      }
+      const normalizedName = String(position.name || "").trim().toLowerCase();
+      if (normalizedName) {
+        localPositionIdByName.set(normalizedName, localPositionId);
+      }
+    }
+
+    const importedPersonIds = Array.from(localPersonIdByExternal.values());
+    const externalPersonIdByLocal = new Map(
+      [...localPersonIdByExternal.entries()].map(([ext, local]) => [local, ext]),
+    );
+
+    if (importedPersonIds.length > 0) {
+      await client.query("DELETE FROM person_positions WHERE person_id = ANY($1::int[])", [importedPersonIds]);
+      await client.query("DELETE FROM blocked_out WHERE person_id = ANY($1::int[])", [importedPersonIds]);
+    }
+
+    const rankedPositionsByPerson = new Map();
+    for (const assignment of bundle.assignments) {
+      const personId = localPersonIdByExternal.get(assignment.personId);
+      const positionId = localPositionIdByExternal.get(assignment.positionId);
+      if (!personId || !positionId) {
+        continue;
+      }
+
+      if (!rankedPositionsByPerson.has(personId)) {
+        rankedPositionsByPerson.set(personId, []);
+      }
+
+      const positionsForPerson = rankedPositionsByPerson.get(personId);
+      if (!positionsForPerson.includes(positionId)) {
+        positionsForPerson.push(positionId);
+      }
+    }
+
+    let assignmentsInserted = 0;
+    for (const [personId, positionIds] of rankedPositionsByPerson.entries()) {
+      for (let index = 0; index < positionIds.length; index += 1) {
+        await client.query(
+          `INSERT INTO person_positions (person_id, position_id, rank_order)
+           VALUES ($1, $2, $3)
+           ON CONFLICT (person_id, position_id)
+           DO UPDATE SET
+             rank_order = EXCLUDED.rank_order,
+             updated_at = NOW()`,
+          [personId, positionIds[index], index + 1],
+        );
+        assignmentsInserted += 1;
+      }
+    }
+
+    let blockedOutInserted = 0;
+    const today = new Date().toISOString().slice(0, 10);
+    for (const [externalPersonId, ranges] of bundle.blockoutRangesByPerson.entries()) {
+      const personId = localPersonIdByExternal.get(externalPersonId);
+      if (!personId) {
+        continue;
+      }
+
+      for (const range of ranges) {
+        if (range.endDate < today) {
+          continue;
+        }
+
+        await client.query(
+          `INSERT INTO blocked_out (person_id, start_date, end_date)
+           VALUES ($1, $2, $3)`,
+          [personId, range.startDate, range.endDate],
+        );
+        blockedOutInserted += 1;
+      }
+    }
+
+    let schedulesImported = 0;
+    let scheduleAssignmentsImported = 0;
+    const scheduleIdByDate = new Map();
+
+    for (const item of (bundle.scheduledAssignments || [])) {
+      const localPersonId = localPersonIdByExternal.get(item.personId);
+      if (!localPersonId) {
+        continue;
+      }
+
+      const normalizedPositionName = String(item.positionName || "").trim().toLowerCase();
+      const localPositionId = localPositionIdByName.get(normalizedPositionName);
+      if (!localPositionId) {
+        continue;
+      }
+
+      const trackDate = normalizeDate(item.trackDate);
+      if (!trackDate) {
+        continue;
+      }
+
+      // Local schema only stores Sunday rows in schedule.
+      const weekday = new Date(`${trackDate}T12:00:00Z`).getUTCDay();
+      if (weekday !== 0) {
+        continue;
+      }
+
+      let scheduleId = scheduleIdByDate.get(trackDate);
+      if (!scheduleId) {
+        const weekNumber = weekNumberFromSunday(trackDate);
+        const scheduleResult = await client.query(
+          `INSERT INTO schedule (track_date, week_number, role_id, updated_at)
+           VALUES ($1, $2, $3, NOW())
+           ON CONFLICT (track_date, role_id)
+           DO UPDATE SET
+             week_number = EXCLUDED.week_number,
+             updated_at = NOW()
+           RETURNING id`,
+          [trackDate, weekNumber, role.id],
+        );
+        scheduleId = scheduleResult.rows[0].id;
+        scheduleIdByDate.set(trackDate, scheduleId);
+        schedulesImported += 1;
+      }
+
+      await client.query(
+        `INSERT INTO people_schedule (schedule_id, person_id, position_id)
+         VALUES ($1, $2, $3)
+         ON CONFLICT (schedule_id, position_id)
+         DO UPDATE SET
+           person_id = EXCLUDED.person_id,
+           updated_at = NOW()`,
+        [scheduleId, localPersonId, localPositionId],
+      );
+      scheduleAssignmentsImported += 1;
+    }
+
+    // For imported people with no normal_weeks set, infer their typical weeks
+    // from their scheduling history so auto-scheduling works out of the box.
+    const peopleWithPcoHistory = bundle.scheduledWeeksByPerson?.size ?? 0;
+    const pcoWeeksDiscovered = Array.from(bundle.scheduledWeeksByPerson?.values() ?? [])
+      .reduce((sum, weeks) => sum + weeks.length, 0);
+
+    let normalWeeksInferred = 0;
+    if (importedPersonIds.length > 0) {
+      const noWeeksResult = await client.query(
+        `SELECT id FROM people
+         WHERE id = ANY($1::int[])
+           AND NOT EXISTS (
+             SELECT 1 FROM normal_weeks nw WHERE nw.person_id = people.id
+           )`,
+        [importedPersonIds],
+      );
+
+      for (const row of noWeeksResult.rows) {
+        const historyResult = await client.query(
+          `SELECT DISTINCT s.week_number
+           FROM people_schedule ps
+           JOIN schedule s ON s.id = ps.schedule_id
+           WHERE ps.person_id = $1
+           ORDER BY s.week_number`,
+          [row.id],
+        );
+
+        let weekNumbers = historyResult.rows.map((r) => r.week_number);
+
+        // Fall back to PCO scheduling history when no local history exists yet.
+        if (weekNumbers.length === 0) {
+          const extId = externalPersonIdByLocal.get(row.id);
+          const pcoWeeks = extId ? bundle.scheduledWeeksByPerson?.get(extId) : null;
+          if (pcoWeeks?.length) {
+            weekNumbers = pcoWeeks;
+          }
+        }
+
+        for (const weekNumber of weekNumbers) {
+          await client.query(
+            `INSERT INTO normal_weeks (person_id, week_number)
+             VALUES ($1, $2)
+             ON CONFLICT (person_id, week_number) DO NOTHING`,
+            [row.id, weekNumber],
+          );
+          normalWeeksInferred += 1;
+        }
+      }
+    }
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      roleId: role.id,
+      roleName: role.name,
+      imported: {
+        people: localPersonIdByExternal.size,
+        positions: localPositionIdByExternal.size,
+        personPositionAssignments: assignmentsInserted,
+        blockedOutRanges: blockedOutInserted,
+        schedulesImported,
+        scheduleAssignmentsImported,
+        peopleWithPcoHistory,
+        pcoWeeksDiscovered,
+        normalWeeksInferred,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return handleServerError(res, "Planning Center import failed", error);
+  } finally {
+    client.release();
   }
 });
 
@@ -706,7 +1153,7 @@ app.get("/api/people", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, include_in_auto_schedule, created_at, updated_at
+      `SELECT id, name, include_in_auto_schedule, max_weeks_per_month, created_at, updated_at
        FROM people
        WHERE role_id = $1
        ORDER BY name ASC`,
@@ -729,7 +1176,7 @@ app.get("/api/people/:id", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, include_in_auto_schedule, created_at, updated_at
+      `SELECT id, name, include_in_auto_schedule, max_weeks_per_month, created_at, updated_at
        FROM people
        WHERE id = $1 AND role_id = $2`,
       [id, roleId],
@@ -757,10 +1204,10 @@ app.post("/api/people", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `INSERT INTO people (name, include_in_auto_schedule, role_id)
-       VALUES ($1, $2, $3)
-       RETURNING id, name, include_in_auto_schedule, created_at, updated_at`,
-      [name, includeInAutoSchedule, roleId],
+      `INSERT INTO people (name, include_in_auto_schedule, max_weeks_per_month, role_id)
+       VALUES ($1, $2, $3, $4)
+       RETURNING id, name, include_in_auto_schedule, max_weeks_per_month, created_at, updated_at`,
+      [name, includeInAutoSchedule, 3, roleId],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -783,15 +1230,18 @@ app.put("/api/people/:id", requireAuth, async (req, res) => {
   const roleId = await resolveRoleId(req, res);
   if (!roleId) return;
 
+  const maxWeeksPerMonth = parsePositiveInt(req.body.maxWeeksPerMonth);
+
   try {
     const result = await pool.query(
       `UPDATE people
        SET name = $1,
            include_in_auto_schedule = COALESCE($2, include_in_auto_schedule),
+           max_weeks_per_month = COALESCE($3, max_weeks_per_month),
            updated_at = NOW()
-       WHERE id = $3 AND role_id = $4
-       RETURNING id, name, include_in_auto_schedule, created_at, updated_at`,
-      [name, includeInAutoSchedule, id, roleId],
+       WHERE id = $4 AND role_id = $5
+       RETURNING id, name, include_in_auto_schedule, max_weeks_per_month, created_at, updated_at`,
+      [name, includeInAutoSchedule, maxWeeksPerMonth, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -1002,6 +1452,7 @@ app.get("/api/blocked-out", requireAuth, async (req, res) => {
        FROM blocked_out b
        JOIN people p ON p.id = b.person_id
        WHERE p.role_id = $1
+         AND b.end_date >= CURRENT_DATE
        ORDER BY b.start_date ASC, p.name ASC`,
       [roleId],
     );
@@ -1164,9 +1615,9 @@ app.get("/api/positions", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, required, priority, created_at, updated_at
+      `SELECT id, name, required, priority, can_double_up, created_at, updated_at
        FROM positions
-       WHERE role_id = $1
+       WHERE role_id = $1 AND soft_deleted = FALSE
        ORDER BY priority ASC, name ASC`,
       [roleId],
     );
@@ -1188,9 +1639,9 @@ app.get("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, required, priority, created_at, updated_at
+      `SELECT id, name, required, priority, can_double_up, created_at, updated_at
        FROM positions
-       WHERE id = $1 AND role_id = $2`,
+       WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE`,
       [id, roleId],
     );
 
@@ -1207,6 +1658,7 @@ app.get("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
 app.post("/api/positions", requireAuth, async (req, res) => {
   const name = normalizeText(req.body.name);
   const required = parseOptionalBoolean(req.body.required);
+  const canDoubleUp = parseOptionalBoolean(req.body.canDoubleUp);
 
   if (!name) {
     return res.status(400).json({ error: "Name is required." });
@@ -1217,16 +1669,16 @@ app.post("/api/positions", requireAuth, async (req, res) => {
 
   try {
     const priorityResult = await pool.query(
-      "SELECT COALESCE(MAX(priority), 0)::int + 1 AS next_priority FROM positions WHERE role_id = $1",
+      "SELECT COALESCE(MAX(priority), 0)::int + 1 AS next_priority FROM positions WHERE role_id = $1 AND soft_deleted = FALSE",
       [roleId],
     );
     const nextPriority = priorityResult.rows[0].next_priority;
 
     const result = await pool.query(
-      `INSERT INTO positions (name, required, priority, role_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, required, priority, created_at, updated_at`,
-      [name, required === null ? true : required, nextPriority, roleId],
+      `INSERT INTO positions (name, required, priority, can_double_up, role_id)
+       VALUES ($1, $2, $3, $4, $5)
+       RETURNING id, name, required, priority, can_double_up, created_at, updated_at`,
+      [name, required === null ? true : required, nextPriority, canDoubleUp === null ? false : canDoubleUp, roleId],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -1244,6 +1696,7 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
   const name = req.body.name === undefined ? null : normalizeText(req.body.name);
   const priority = parsePositiveInt(req.body.priority);
   const required = parseOptionalBoolean(req.body.required);
+  const canDoubleUp = parseOptionalBoolean(req.body.canDoubleUp);
 
   if (!id) {
     return res.status(400).json({ error: "Valid ID is required." });
@@ -1253,7 +1706,7 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Name cannot be blank." });
   }
 
-  if (name === null && !priority && required === null) {
+  if (name === null && !priority && required === null && canDoubleUp === null) {
     return res.status(400).json({ error: "At least one field to update is required." });
   }
 
@@ -1266,10 +1719,11 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
        SET name = COALESCE($1, name),
            priority = COALESCE($2, priority),
            required = COALESCE($3, required),
+           can_double_up = COALESCE($4, can_double_up),
            updated_at = NOW()
-       WHERE id = $4 AND role_id = $5
-       RETURNING id, name, required, priority, created_at, updated_at`,
-      [name, priority, required, id, roleId],
+       WHERE id = $5 AND role_id = $6 AND soft_deleted = FALSE
+       RETURNING id, name, required, priority, can_double_up, created_at, updated_at`,
+      [name, priority, required, canDoubleUp, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -1303,7 +1757,7 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
     await client.query("BEGIN");
 
     const existingResult = await client.query(
-      "SELECT id FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      "SELECT id FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC",
       [roleId],
     );
     const existingIds = existingResult.rows.map((row) => row.id);
@@ -1329,13 +1783,100 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
     await client.query("COMMIT");
 
     const updated = await pool.query(
-      "SELECT id, name, required, priority, created_at, updated_at FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      "SELECT id, name, required, priority, created_at, updated_at FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC",
       [roleId],
     );
     return res.json(updated.rows);
   } catch (error) {
     await client.query("ROLLBACK");
     return handleServerError(res, "Failed to reorder positions", error);
+  } finally {
+    client.release();
+  }
+});
+
+// --- Position people order ---
+
+app.get("/api/positions/:id(\\d+)/people-order", requireAuth, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  if (!id) return res.status(400).json({ error: "Valid position ID is required." });
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  try {
+    const posCheck = await pool.query(
+      "SELECT id FROM positions WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE",
+      [id, roleId],
+    );
+    if (posCheck.rows.length === 0) {
+      return res.status(404).json({ error: "Position not found." });
+    }
+
+    const result = await pool.query(
+      `SELECT ppo.id, ppo.person_id, ppo.rank_order, p.name AS person_name
+       FROM position_person_order ppo
+       LEFT JOIN people p ON p.id = ppo.person_id
+       WHERE ppo.position_id = $1
+       ORDER BY ppo.rank_order ASC`,
+      [id],
+    );
+
+    return res.json(result.rows);
+  } catch (error) {
+    return handleServerError(res, "Failed to load position people order", error);
+  }
+});
+
+app.put("/api/positions/:id(\\d+)/people-order", requireAuth, async (req, res) => {
+  const id = parsePositiveInt(req.params.id);
+  if (!id) return res.status(400).json({ error: "Valid position ID is required." });
+
+  const items = Array.isArray(req.body.items) ? req.body.items : [];
+
+  const roleId = await resolveRoleId(req, res);
+  if (!roleId) return;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const posCheck = await client.query(
+      "SELECT id FROM positions WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE",
+      [id, roleId],
+    );
+    if (posCheck.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Position not found." });
+    }
+
+    await client.query("DELETE FROM position_person_order WHERE position_id = $1", [id]);
+
+    for (let index = 0; index < items.length; index += 1) {
+      const item = items[index];
+      const personId = item.personId ? parsePositiveInt(item.personId) : null;
+      await client.query(
+        `INSERT INTO position_person_order (position_id, person_id, rank_order)
+         VALUES ($1, $2, $3)`,
+        [id, personId, index + 1],
+      );
+    }
+
+    await client.query("COMMIT");
+
+    const result = await pool.query(
+      `SELECT ppo.id, ppo.person_id, ppo.rank_order, p.name AS person_name
+       FROM position_person_order ppo
+       LEFT JOIN people p ON p.id = ppo.person_id
+       WHERE ppo.position_id = $1
+       ORDER BY ppo.rank_order ASC`,
+      [id],
+    );
+
+    return res.json(result.rows);
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return handleServerError(res, "Failed to save position people order", error);
   } finally {
     client.release();
   }
@@ -1354,7 +1895,7 @@ app.get("/api/people-positions", requireAuth, async (req, res) => {
        FROM person_positions pp
        JOIN people p ON p.id = pp.person_id
        JOIN positions pos ON pos.id = pp.position_id
-       WHERE p.role_id = $1
+      WHERE p.role_id = $1 AND pos.soft_deleted = FALSE
        ORDER BY p.name ASC, pp.rank_order ASC`,
       [roleId],
     );
@@ -1382,7 +1923,7 @@ app.get("/api/people/:id/positions", requireAuth, async (req, res) => {
        FROM person_positions pp
        JOIN positions pos ON pos.id = pp.position_id
        JOIN people p ON p.id = pp.person_id
-       WHERE pp.person_id = $1 AND p.role_id = $2 AND pos.role_id = $2
+      WHERE pp.person_id = $1 AND p.role_id = $2 AND pos.role_id = $2 AND pos.soft_deleted = FALSE
        ORDER BY pp.rank_order ASC`,
       [personId, roleId],
     );
@@ -1464,7 +2005,7 @@ app.put("/api/people/:id/positions/reorder", requireAuth, async (req, res) => {
       `SELECT pp.position_id
        FROM person_positions pp
        JOIN positions pos ON pos.id = pp.position_id
-       WHERE pp.person_id = $1 AND pos.role_id = $2
+       WHERE pp.person_id = $1 AND pos.role_id = $2 AND pos.soft_deleted = FALSE
        ORDER BY pp.rank_order ASC`,
       [personId, roleId],
     );
@@ -1510,7 +2051,7 @@ app.put("/api/people/:id/positions/reorder", requireAuth, async (req, res) => {
       `SELECT pp.person_id, pp.position_id, pp.rank_order, pos.name AS position_name
        FROM person_positions pp
        JOIN positions pos ON pos.id = pp.position_id
-       WHERE pp.person_id = $1
+       WHERE pp.person_id = $1 AND pos.soft_deleted = FALSE
        ORDER BY pp.rank_order ASC`,
       [personId],
     );
@@ -1597,8 +2138,20 @@ app.delete("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
   try {
     await client.query("BEGIN");
 
+    await client.query(
+      `DELETE FROM people_schedule
+       WHERE position_id = $1`,
+      [id],
+    );
+
     const result = await client.query(
-      "DELETE FROM positions WHERE id = $1 AND role_id = $2 RETURNING id",
+      `UPDATE positions
+       SET soft_deleted = TRUE,
+           ignore_import = TRUE,
+           deleted_at = NOW(),
+           updated_at = NOW()
+       WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE
+       RETURNING id`,
       [id, roleId],
     );
 
@@ -1608,7 +2161,7 @@ app.delete("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     }
 
     const remaining = await client.query(
-      "SELECT id FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC",
+      "SELECT id FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC",
       [roleId],
     );
     for (let index = 0; index < remaining.rows.length; index += 1) {
@@ -2077,9 +2630,9 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
   try {
     await client.query("BEGIN");
 
-    const [peopleResult, positionsResult, normalWeeksResult, blockedResult, personPositionsResult] = await Promise.all([
+    const [peopleResult, positionsResult, normalWeeksResult, blockedResult, personPositionsResult, positionPeopleOrderResult] = await Promise.all([
       client.query("SELECT id, name FROM people WHERE include_in_auto_schedule = TRUE AND role_id = $1 ORDER BY id ASC", [roleId]),
-      client.query("SELECT id, name, required, priority FROM positions WHERE role_id = $1 ORDER BY priority ASC, id ASC", [roleId]),
+      client.query("SELECT id, name, required, priority, can_double_up FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC", [roleId]),
       client.query(
         `SELECT nw.person_id, nw.week_number
          FROM normal_weeks nw
@@ -2102,10 +2655,23 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
          WHERE p.role_id = $1 AND pos.role_id = $1`,
         [roleId],
       ),
+      client.query(
+        `SELECT ppo.position_id, ppo.person_id, ppo.rank_order
+         FROM position_person_order ppo
+         JOIN positions pos ON pos.id = ppo.position_id
+         WHERE pos.role_id = $1
+         ORDER BY ppo.position_id ASC, ppo.rank_order ASC`,
+        [roleId],
+      ),
     ]);
 
     const people = peopleResult.rows;
     const positions = positionsResult.rows;
+    // Map: positionId -> can_double_up
+    const canDoubleUpByPosition = new Map();
+    positions.forEach((pos) => {
+      canDoubleUpByPosition.set(pos.id, !!pos.can_double_up);
+    });
 
     if (people.length === 0 || positions.length === 0) {
       await client.query("ROLLBACK");
@@ -2134,6 +2700,15 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
         rankByPosition.set(row.position_id, new Map());
       }
       rankByPosition.get(row.position_id).set(row.person_id, row.rank_order);
+    });
+
+    // Position-level people order: for each position, ordered list with null = "Everyone Else"
+    const personOrderByPosition = new Map();
+    positionPeopleOrderResult.rows.forEach((row) => {
+      if (!personOrderByPosition.has(row.position_id)) {
+        personOrderByPosition.set(row.position_id, []);
+      }
+      personOrderByPosition.get(row.position_id).push(row);
     });
 
     const existingSchedulesResult = await client.query(
@@ -2186,17 +2761,10 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
 
     const createdAssignments = [];
 
-    function shuffle(array) {
-      const next = [...array];
-      for (let index = next.length - 1; index > 0; index -= 1) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
-        [next[index], next[swapIndex]] = [next[swapIndex], next[index]];
-      }
-      return next;
-    }
-
     function getEligiblePeople(date, weekNumber, positionId, assignedPersonIds) {
       const rankMap = rankByPosition.get(positionId) || new Map();
+      const posOrder = personOrderByPosition.get(positionId) || [];
+      const everyoneElseRank = posOrder.find((item) => item.person_id === null)?.rank_order ?? 0;
 
       return people.filter((person) => {
         const availableWeeks = weeksByPerson.get(person.id);
@@ -2208,111 +2776,99 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
           return false;
         }
 
+        // Check double up logic
         if (assignedPersonIds.has(person.id)) {
-          return false;
+          // Find all positions this person is already assigned to for this week
+          // assignedPersonIds is a Set of personIds, but we need to know which positions
+          // We'll need to pass in assignedState or track assignments differently
+          // Instead, let's pass in assignedState to getEligiblePeople
+          // For now, fallback: block unless current position or any assigned position is double up
+          // We'll fix this below in buildOptimalAssignments
+          return false; // placeholder, will fix below
         }
 
         const blocks = blockedByPerson.get(person.id) || [];
         return !isDateBlocked(date, blocks);
+      }).sort((left, right) => {
+        // Sort by position-level people order for tie-breaking
+        const leftEntry = posOrder.find((item) => item.person_id === left.id);
+        const rightEntry = posOrder.find((item) => item.person_id === right.id);
+
+        const leftRank = leftEntry !== undefined ? leftEntry.rank_order : everyoneElseRank;
+        const rightRank = rightEntry !== undefined ? rightEntry.rank_order : everyoneElseRank;
+
+        return leftRank - rightRank;
       });
     }
 
     function buildOptimalAssignments(date, weekNumber, assignedState) {
+      const assignments = [];
       const remainingPositions = positions
         .filter((position) => !assignedState.positionIds.has(position.id))
         .sort((left, right) => left.priority - right.priority || left.id - right.id);
 
-      if (remainingPositions.length === 0) {
-        return [];
+      // Greedy approach: fill positions in priority order
+      // Track: personId -> array of assigned positionIds for this week
+      const assignedPositionsByPerson = new Map();
+      for (const pid of assignedState.personIds) {
+        assignedPositionsByPerson.set(pid, []);
+      }
+      for (const posid of assignedState.positionIds) {
+        // We don't have a direct mapping of personId <-> positionId for this week in assignedState
+        // So we need to build it as we assign
+        // We'll build it as we go below
       }
 
-      const remainingPeople = people
-        .filter((person) => !assignedState.personIds.has(person.id));
-
-      const positionScoreByIndex = remainingPositions.map((position, index) => {
-        const priorityBit = 1n << BigInt(remainingPositions.length - index);
-        const requiredBit = position.required ? (1n << BigInt(remainingPositions.length * 2)) : 0n;
-        return requiredBit + priorityBit;
-      });
-
-      const eligiblePeopleByPositionIndex = remainingPositions.map((position) => (
-        new Set(getEligiblePeople(date, weekNumber, position.id, assignedState.personIds).map((person) => person.id))
-      ));
-
-      const eligiblePositionIndexesByPerson = remainingPeople.map((person) => (
-        shuffle(
-          remainingPositions
-            .map((_, positionIndex) => positionIndex)
-            .filter((positionIndex) => eligiblePeopleByPositionIndex[positionIndex].has(person.id)),
-        )
-      ));
-
-      const memo = new Map();
-
-      function solve(personIndex, mask) {
-        if (personIndex >= remainingPeople.length) {
-          return 0n;
-        }
-
-        const key = `${personIndex}:${mask}`;
-        if (memo.has(key)) {
-          return memo.get(key);
-        }
-
-        let best = solve(personIndex + 1, mask);
-
-        for (const positionIndex of eligiblePositionIndexesByPerson[personIndex]) {
-          const bit = 1 << positionIndex;
-          if (mask & bit) {
-            continue;
+      for (const position of remainingPositions) {
+        // Build eligiblePeople with double up logic
+        const eligiblePeople = people.filter((person) => {
+          const availableWeeks = weeksByPerson.get(person.id);
+          if (!availableWeeks?.has(weekNumber)) {
+            return false;
           }
-
-          const score = positionScoreByIndex[positionIndex] + solve(personIndex + 1, mask | bit);
-          if (score > best) {
-            best = score;
+          if (!rankByPosition.get(position.id)?.has(person.id)) {
+            return false;
           }
-        }
+          // Double up logic:
+          const alreadyAssignedPositions = assignedPositionsByPerson.get(person.id) || [];
+          if (alreadyAssignedPositions.length > 0) {
+            // Allow if EITHER this position OR any already assigned position is double up
+            const thisIsDouble = !!canDoubleUpByPosition.get(position.id);
+            const anyOtherIsDouble = alreadyAssignedPositions.some((pid) => canDoubleUpByPosition.get(pid));
+            if (!(thisIsDouble || anyOtherIsDouble)) {
+              return false;
+            }
+          }
+          const blocks = blockedByPerson.get(person.id) || [];
+          return !isDateBlocked(date, blocks);
+        }).sort((left, right) => {
+          // Sort by position-level people order for tie-breaking
+          const posOrder = personOrderByPosition.get(position.id) || [];
+          const everyoneElseRank = posOrder.find((item) => item.person_id === null)?.rank_order ?? 0;
+          const leftEntry = posOrder.find((item) => item.person_id === left.id);
+          const rightEntry = posOrder.find((item) => item.person_id === right.id);
+          const leftRank = leftEntry !== undefined ? leftEntry.rank_order : everyoneElseRank;
+          const rightRank = rightEntry !== undefined ? rightEntry.rank_order : everyoneElseRank;
+          return leftRank - rightRank;
+        });
 
-        memo.set(key, best);
-        return best;
-      }
-
-      const assignments = [];
-
-      function reconstruct(personIndex, mask) {
-        if (personIndex >= remainingPeople.length) {
-          return;
-        }
-
-        const baseline = solve(personIndex + 1, mask);
-        const currentBest = solve(personIndex, mask);
-
-        const matchingChoices = eligiblePositionIndexesByPerson[personIndex]
-          .filter((positionIndex) => !(mask & (1 << positionIndex)))
-          .filter((positionIndex) => {
-            const bit = 1 << positionIndex;
-            const score = positionScoreByIndex[positionIndex] + solve(personIndex + 1, mask | bit);
-            return score === currentBest;
-          });
-
-        if (matchingChoices.length > 0) {
-          const selectedPositionIndex = matchingChoices[0];
+        if (eligiblePeople.length > 0) {
+          const selectedPerson = eligiblePeople[0];
           assignments.push({
-            person: remainingPeople[personIndex],
-            position: remainingPositions[selectedPositionIndex],
+            person: selectedPerson,
+            position,
           });
-          reconstruct(personIndex + 1, mask | (1 << selectedPositionIndex));
-          return;
-        }
-
-        if (baseline === currentBest) {
-          reconstruct(personIndex + 1, mask);
+          assignedState.personIds.add(selectedPerson.id);
+          assignedState.positionIds.add(position.id);
+          // Track assignment for double up logic
+          if (!assignedPositionsByPerson.has(selectedPerson.id)) {
+            assignedPositionsByPerson.set(selectedPerson.id, []);
+          }
+          assignedPositionsByPerson.get(selectedPerson.id).push(position.id);
         }
       }
 
-      reconstruct(0, 0);
-
-      return assignments.sort((left, right) => left.position.priority - right.position.priority || left.position.id - right.position.id);
+      return assignments;
     }
 
     for (const date of sundayDates) {

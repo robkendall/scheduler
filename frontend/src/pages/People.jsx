@@ -1,8 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import MenuItem from "@mui/material/MenuItem";
@@ -35,6 +39,7 @@ import { formatDisplayDate } from "../utils/date";
 const EMPTY_DRAFT = {
     name: "",
     includeInAutoSchedule: true,
+    maxWeeksPerMonth: 3,
     normalWeeks: [],
     blockedOut: [],
     positionIds: [],
@@ -58,7 +63,7 @@ function People({ activeRoleId, user }) {
     const [blockedInput, setBlockedInput] = useState({ startDate: "", endDate: "" });
     const [positionInput, setPositionInput] = useState("");
     const [dragIndex, setDragIndex] = useState(null);
-    const panelRef = useRef(null);
+    const [modalOpen, setModalOpen] = useState(false);
     const activeRoleName = user?.roles?.find((role) => role.id === activeRoleId)?.name || "Role";
 
     async function loadData() {
@@ -109,13 +114,18 @@ function People({ activeRoleId, user }) {
         loadData();
     }, [activeRoleId]);
 
-    function beginNewDraft() {
+    function resetDraft() {
         setIsNewDraft(true);
         setSelectedPersonId(null);
         setDraft(EMPTY_DRAFT);
         setBlockedInput({ startDate: "", endDate: "" });
         setPositionInput("");
         setDragIndex(null);
+    }
+
+    function beginNewDraft() {
+        resetDraft();
+        setModalOpen(true);
     }
 
     function buildDraftFromPerson(personId, data = null) {
@@ -151,6 +161,7 @@ function People({ activeRoleId, user }) {
         return {
             name: person.name,
             includeInAutoSchedule: Boolean(person.include_in_auto_schedule),
+            maxWeeksPerMonth: person.max_weeks_per_month || 3,
             normalWeeks: personWeeks,
             blockedOut: personBlocked,
             positionIds: personPositionIds,
@@ -164,7 +175,7 @@ function People({ activeRoleId, user }) {
         setBlockedInput({ startDate: "", endDate: "" });
         setPositionInput("");
         setDragIndex(null);
-        panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+        setModalOpen(true);
     }
 
     function beginEditWithData(personId, data) {
@@ -174,7 +185,6 @@ function People({ activeRoleId, user }) {
         setBlockedInput({ startDate: "", endDate: "" });
         setPositionInput("");
         setDragIndex(null);
-        panelRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     }
 
     const selectedPerson = useMemo(
@@ -364,12 +374,13 @@ function People({ activeRoleId, user }) {
             if (isNewDraft) {
                 const created = await createPerson({
                     name: draft.name,
-                    includeInAutoSchedule: Boolean(draft.includeInAutoSchedule),
+                    maxWeeksPerMonth: parseInt(draft.maxWeeksPerMonth, 10),
                 }, activeRoleId);
 
                 await syncRelatedData(created.id, [], [], []);
                 await loadData();
-                beginNewDraft();
+                resetDraft();
+                setModalOpen(false);
             } else {
                 const personId = selectedPersonId;
                 const existingWeeks = normalWeeks.filter((item) => item.person_id === personId);
@@ -382,6 +393,7 @@ function People({ activeRoleId, user }) {
                 await updatePerson(personId, {
                     name: draft.name,
                     includeInAutoSchedule: Boolean(draft.includeInAutoSchedule),
+                    maxWeeksPerMonth: parseInt(draft.maxWeeksPerMonth, 10),
                 }, activeRoleId);
 
                 await syncRelatedData(personId, existingWeeks, existingBlocked, existingPositionIds);
@@ -404,7 +416,8 @@ function People({ activeRoleId, user }) {
         try {
             await deletePerson(selectedPersonId, activeRoleId);
             await loadData();
-            beginNewDraft();
+            resetDraft();
+            setModalOpen(false);
         } catch (requestError) {
             setError(requestError.message);
         }
@@ -420,154 +433,183 @@ function People({ activeRoleId, user }) {
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
             {loading ? <Typography sx={{ mb: 2 }}>Loading configuration...</Typography> : null}
 
-            <Box ref={panelRef} className="hero-card form-stack" component="form" onSubmit={saveDraft} sx={{ mb: 2 }}>
-                <Typography variant="h5">{isNewDraft ? "New person" : `Edit person: ${selectedPerson?.name || ""}`}</Typography>
-                <TextField
-                    label="Name"
-                    value={draft.name}
-                    onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
-                    required
-                />
-                <Stack direction="row" spacing={1} alignItems="center">
-                    <Typography variant="body2">Auto scheduling</Typography>
-                    <Switch
-                        checked={Boolean(draft.includeInAutoSchedule)}
-                        onChange={(event) => setDraft((prev) => ({ ...prev, includeInAutoSchedule: event.target.checked }))}
-                    />
-                </Stack>
-
-                <Divider />
-
-                <Box className="form-stack">
-                    <Typography variant="subtitle1">Normal weeks</Typography>
-                    <Stack direction="row" spacing={1} flexWrap="wrap">
-                        {[1, 2, 3, 4, 5].map((week) => (
-                            <FormControlLabel
-                                key={week}
-                                label={`Week ${week}`}
-                                control={
-                                    <Checkbox
-                                        checked={draft.normalWeeks.some((item) => item.weekNumber === week)}
-                                        onChange={() => toggleNormalWeek(week)}
-                                    />
-                                }
+            <Dialog
+                open={modalOpen}
+                onClose={() => { if (!saving) { resetDraft(); setModalOpen(false); } }}
+                scroll="paper"
+                fullWidth
+                maxWidth="sm"
+            >
+                <DialogTitle>
+                    {isNewDraft ? "New person" : `Edit: ${selectedPerson?.name || ""}`}
+                </DialogTitle>
+                <DialogContent dividers>
+                    <Box component="form" id="person-form" onSubmit={saveDraft} className="form-stack">
+                        <TextField
+                            label="Name"
+                            value={draft.name}
+                            onChange={(event) => setDraft((prev) => ({ ...prev, name: event.target.value }))}
+                            required
+                        />
+                        <Stack direction="row" spacing={1} alignItems="center">
+                            <Typography variant="body2">Auto scheduling</Typography>
+                            <Switch
+                                checked={Boolean(draft.includeInAutoSchedule)}
+                                onChange={(event) => setDraft((prev) => ({ ...prev, includeInAutoSchedule: event.target.checked }))}
                             />
-                        ))}
-                    </Stack>
-                </Box>
+                        </Stack>
 
-                <Divider />
-
-                <Box className="form-stack">
-                    <Typography variant="subtitle1">Blocked out dates</Typography>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                        <TextField
-                            label="Start date"
-                            type="date"
-                            value={blockedInput.startDate}
-                            onChange={(event) => {
-                                const start = event.target.value;
-                                setBlockedInput((prev) => ({
-                                    startDate: start,
-                                    endDate: prev.endDate || start,
-                                }));
-                            }}
-                            InputLabelProps={{ shrink: true }}
-                        />
-                        <TextField
-                            label="End date"
-                            type="date"
-                            value={blockedInput.endDate}
-                            onChange={(event) => setBlockedInput((prev) => ({ ...prev, endDate: event.target.value }))}
-                            InputLabelProps={{ shrink: true }}
-                        />
-                        <Button type="button" variant="contained" onClick={addBlockedRangeToDraft}>Add blocked range</Button>
-                    </Stack>
-                    <Stack spacing={0.5}>
-                        {draft.blockedOut.length === 0 ? <Typography color="text.secondary">No blocked dates set.</Typography> : null}
-                        {draft.blockedOut.map((item) => (
-                            <Stack key={`${item.id || "draft"}-${item.startDate}-${item.endDate}`} direction="row" justifyContent="space-between" alignItems="center">
-                                <Typography>{formatDisplayDate(item.startDate)} to {formatDisplayDate(item.endDate)}</Typography>
-                                <Button size="small" color="error" onClick={() => removeBlockedRangeFromDraft(item)}>Remove</Button>
-                            </Stack>
-                        ))}
-                    </Stack>
-                </Box>
-
-                <Divider />
-
-                <Box className="form-stack">
-                    <Typography variant="subtitle1">Positions</Typography>
-                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
                         <TextField
                             select
-                            label="Add position"
-                            value={positionInput}
-                            onChange={(event) => setPositionInput(event.target.value)}
-                            sx={{ minWidth: 240 }}
+                            label="Max weeks per calendar month"
+                            value={draft.maxWeeksPerMonth}
+                            onChange={(event) => setDraft((prev) => ({ ...prev, maxWeeksPerMonth: event.target.value }))}
                         >
-                            {availablePositions.map((position) => (
-                                <MenuItem key={position.id} value={String(position.id)}>
-                                    {position.name}
+                            {[1, 2, 3, 4, 5].map((num) => (
+                                <MenuItem key={num} value={num}>
+                                    {num} week{num > 1 ? "s" : ""}
                                 </MenuItem>
                             ))}
                         </TextField>
-                        <Button type="button" variant="contained" onClick={addPositionToDraft} disabled={!positionInput}>
-                            Add position
-                        </Button>
-                    </Stack>
-                    <Typography variant="body2" color="text.secondary">
-                        Drag to rank this person's position preference.
-                    </Typography>
-                    <Stack spacing={1}>
-                        {rankedPositions.length === 0 ? <Typography color="text.secondary">No positions assigned.</Typography> : null}
-                        {rankedPositions.map((position, index) => (
-                            <Box
-                                key={position.id}
-                                draggable
-                                onDragStart={() => setDragIndex(index)}
-                                onDragOver={(event) => event.preventDefault()}
-                                onDrop={() => handlePositionDrop(index)}
-                                sx={{
-                                    display: "flex",
-                                    alignItems: "center",
-                                    justifyContent: "space-between",
-                                    border: "1px solid rgba(15, 118, 110, 0.18)",
-                                    borderRadius: 0.5,
-                                    p: 1,
-                                    backgroundColor: "rgba(255, 250, 242, 0.85)",
-                                }}
-                            >
-                                <Stack direction="row" spacing={1} alignItems="center">
-                                    <DragIndicatorRoundedIcon fontSize="small" color="action" />
-                                    <Typography>{position.name}</Typography>
-                                </Stack>
-                                <Button size="small" color="error" onClick={() => removePositionFromDraft(position.id)}>
-                                    Remove
+
+                        <Divider />
+
+                        <Box className="form-stack">
+                            <Typography variant="subtitle1">Normal weeks</Typography>
+                            <Stack direction="row" spacing={1} flexWrap="wrap">
+                                {[1, 2, 3, 4, 5].map((week) => (
+                                    <FormControlLabel
+                                        key={week}
+                                        label={`Week ${week}`}
+                                        control={
+                                            <Checkbox
+                                                checked={draft.normalWeeks.some((item) => item.weekNumber === week)}
+                                                onChange={() => toggleNormalWeek(week)}
+                                            />
+                                        }
+                                    />
+                                ))}
+                            </Stack>
+                        </Box>
+
+                        <Divider />
+
+                        <Box className="form-stack">
+                            <Typography variant="subtitle1">Blocked out dates</Typography>
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                                <TextField
+                                    label="Start date"
+                                    type="date"
+                                    value={blockedInput.startDate}
+                                    onChange={(event) => {
+                                        const start = event.target.value;
+                                        setBlockedInput((prev) => ({
+                                            startDate: start,
+                                            endDate: prev.endDate || start,
+                                        }));
+                                    }}
+                                    InputLabelProps={{ shrink: true }}
+                                />
+                                <TextField
+                                    label="End date"
+                                    type="date"
+                                    value={blockedInput.endDate}
+                                    onChange={(event) => setBlockedInput((prev) => ({ ...prev, endDate: event.target.value }))}
+                                    InputLabelProps={{ shrink: true }}
+                                />
+                                <Button type="button" variant="contained" onClick={addBlockedRangeToDraft}>Add blocked range</Button>
+                            </Stack>
+                            <Stack spacing={0.5}>
+                                {draft.blockedOut.length === 0 ? <Typography color="text.secondary">No blocked dates set.</Typography> : null}
+                                {draft.blockedOut.map((item) => (
+                                    <Stack key={`${item.id || "draft"}-${item.startDate}-${item.endDate}`} direction="row" justifyContent="space-between" alignItems="center">
+                                        <Typography>{formatDisplayDate(item.startDate)} to {formatDisplayDate(item.endDate)}</Typography>
+                                        <Button size="small" color="error" onClick={() => removeBlockedRangeFromDraft(item)}>Remove</Button>
+                                    </Stack>
+                                ))}
+                            </Stack>
+                        </Box>
+
+                        <Divider />
+
+                        <Box className="form-stack">
+                            <Typography variant="subtitle1">Positions</Typography>
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                                <TextField
+                                    select
+                                    label="Add position"
+                                    value={positionInput}
+                                    onChange={(event) => setPositionInput(event.target.value)}
+                                    sx={{ minWidth: 240 }}
+                                >
+                                    {availablePositions.map((position) => (
+                                        <MenuItem key={position.id} value={String(position.id)}>
+                                            {position.name}
+                                        </MenuItem>
+                                    ))}
+                                </TextField>
+                                <Button type="button" variant="contained" onClick={addPositionToDraft} disabled={!positionInput}>
+                                    Add position
                                 </Button>
-                            </Box>
-                        ))}
+                            </Stack>
+                            <Typography variant="body2" color="text.secondary">
+                                Drag to rank this person's position preference.
+                            </Typography>
+                            <Stack spacing={1}>
+                                {rankedPositions.length === 0 ? <Typography color="text.secondary">No positions assigned.</Typography> : null}
+                                {rankedPositions.map((position, index) => (
+                                    <Box
+                                        key={position.id}
+                                        draggable
+                                        onDragStart={() => setDragIndex(index)}
+                                        onDragOver={(event) => event.preventDefault()}
+                                        onDrop={() => handlePositionDrop(index)}
+                                        sx={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            justifyContent: "space-between",
+                                            border: "1px solid rgba(15, 118, 110, 0.18)",
+                                            borderRadius: 0.5,
+                                            p: 1,
+                                            backgroundColor: "rgba(255, 250, 242, 0.85)",
+                                        }}
+                                    >
+                                        <Stack direction="row" spacing={1} alignItems="center">
+                                            <DragIndicatorRoundedIcon fontSize="small" color="action" />
+                                            <Typography>{position.name}</Typography>
+                                        </Stack>
+                                        <Button size="small" color="error" onClick={() => removePositionFromDraft(position.id)}>
+                                            Remove
+                                        </Button>
+                                    </Box>
+                                ))}
+                            </Stack>
+                        </Box>
+                    </Box>
+                </DialogContent>
+                <DialogActions>
+                    <Stack direction="row" spacing={1} sx={{ width: "100%", justifyContent: "space-between" }}>
+                        <Box>
+                            {!isNewDraft ? (
+                                <Button color="error" variant="outlined" onClick={removeCurrentPerson}>
+                                    Delete person
+                                </Button>
+                            ) : null}
+                        </Box>
+                        <Stack direction="row" spacing={1}>
+                            {!isNewDraft ? (
+                                <Button variant="outlined" onClick={() => selectedPersonId && beginEdit(selectedPersonId)}>
+                                    Reset changes
+                                </Button>
+                            ) : null}
+                            <Button onClick={() => { resetDraft(); setModalOpen(false); }}>Cancel</Button>
+                            <Button type="submit" form="person-form" variant="contained" disabled={saving}>
+                                {saving ? "Saving..." : isNewDraft ? "Create person" : "Save changes"}
+                            </Button>
+                        </Stack>
                     </Stack>
-                </Box>
-
-                <Divider />
-
-                <Stack direction="row" spacing={1}>
-                    <Button type="submit" variant="contained" disabled={saving}>
-                        {saving ? "Saving..." : isNewDraft ? "Create person" : "Save changes"}
-                    </Button>
-                    {!isNewDraft ? (
-                        <Button type="button" color="error" variant="outlined" onClick={removeCurrentPerson}>
-                            Delete person
-                        </Button>
-                    ) : null}
-                    {!isNewDraft ? (
-                        <Button type="button" variant="outlined" onClick={() => selectedPersonId && beginEdit(selectedPersonId)}>
-                            Reset changes
-                        </Button>
-                    ) : null}
-                </Stack>
-            </Box>
+                </DialogActions>
+            </Dialog>
 
             <Box className="hero-card form-stack">
                 <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" alignItems={{ sm: "center" }}>
