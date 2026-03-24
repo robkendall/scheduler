@@ -161,13 +161,15 @@ function App() {
 
     useEffect(() => {
         if (!user?.roles?.length) {
-            setActiveRoleId(null);
+            // Defer setState to avoid cascading renders
+            Promise.resolve().then(() => setActiveRoleId(null));
             return;
         }
 
         const hasCurrentRole = user.roles.some((role) => role.id === activeRoleId);
         if (!hasCurrentRole) {
-            setActiveRoleId(user.roles[0].id);
+            // Defer setState to avoid cascading renders
+            Promise.resolve().then(() => setActiveRoleId(user.roles[0].id));
         }
     }, [activeRoleId, user]);
 

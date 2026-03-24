@@ -182,7 +182,7 @@ function PlanningCenterAdmin() {
         try {
             for (const role of mappedRoles) {
                 // Keep imports deterministic and easy to troubleshoot.
-                // eslint-disable-next-line no-await-in-loop
+                 
                 const result = await importPlanningCenterRole(role.id);
                 setImportSummary((prev) => [
                     `${role.name}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`,
