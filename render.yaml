@@ -33,6 +33,8 @@ services:
         sync: false
       - key: PCO_AUTH_TOKEN
         sync: false
+      - key: PCO_BASE_URL
+        value: https://api.planningcenteronline.com
 
   - type: web
     name: cg-scheduler

@@ -1,0 +1,103 @@
+{
+  "2026-04-05": {
+    "assignments": {
+      "R EG": "Roman Hendricks",
+      "Keys": "Shady Hannoush",
+      "Bass": "Stephen Di Perri",
+      "Drums": "Devin Forkel",
+      "AG1": "Gary Strohschein",
+      "EG1": "Zachary Hutchens",
+      "AG2": "Empty",
+      "EG2": "Empty",
+      "MD": "Zachary Hutchens"
+    },
+    "unfilled": [
+      "AG2",
+      "EG2"
+    ],
+    "eligible_but_unassigned": [
+      "Luke Harris",
+      "Mandy Johnson",
+      "Aaron Brookins",
+      "Corey Moser",
+      "Ben Jones",
+      "Eric Domingo"
+    ],
+    "available_but_no_fit": []
+  },
+  "2026-04-12": {
+    "assignments": {
+      "R EG": "Roman Hendricks",
+      "Keys": "Shady Hannoush",
+      "Bass": "Adam Davis",
+      "Drums": "Ben Jones",
+      "AG1": "Gary Strohschein",
+      "EG1": "Zachary Hutchens",
+      "AG2": "Empty",
+      "EG2": "Empty",
+      "MD": "Zachary Hutchens"
+    },
+    "unfilled": [
+      "AG2",
+      "EG2"
+    ],
+    "eligible_but_unassigned": [
+      "Luke Harris",
+      "Mandy Johnson",
+      "Aaron Brookins",
+      "Corey Moser",
+      "Erin Davis",
+      "Eric Domingo"
+    ],
+    "available_but_no_fit": []
+  },
+  "2026-04-19": {
+    "assignments": {
+      "R EG": "Roman Hendricks",
+      "Keys": "Shady Hannoush",
+      "Bass": "Stephen Di Perri",
+      "Drums": "Devin Forkel",
+      "AG1": "Gary Strohschein",
+      "EG1": "Zachary Hutchens",
+      "AG2": "Empty",
+      "EG2": "Empty",
+      "MD": "Zachary Hutchens"
+    },
+    "unfilled": [
+      "AG2",
+      "EG2"
+    ],
+    "eligible_but_unassigned": [
+      "Luke Harris",
+      "Mandy Johnson",
+      "Erin Davis",
+      "Eric Domingo"
+    ],
+    "available_but_no_fit": []
+  },
+  "2026-04-26": {
+    "assignments": {
+      "R EG": "Roman Hendricks",
+      "Keys": "Mandy Johnson",
+      "Bass": "Adam Davis",
+      "Drums": "Erin Davis",
+      "AG1": "Empty",
+      "EG1": "Zachary Hutchens",
+      "AG2": "Empty",
+      "EG2": "Empty",
+      "MD": "Zachary Hutchens"
+    },
+    "unfilled": [
+      "AG1",
+      "AG2",
+      "EG2"
+    ],
+    "eligible_but_unassigned": [
+      "Luke Harris",
+      "Aaron Brookins",
+      "Corey Moser",
+      "Eric Domingo"
+    ],
+    "available_but_no_fit": []
+  }
+}

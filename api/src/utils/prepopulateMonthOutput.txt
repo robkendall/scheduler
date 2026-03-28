@@ -1,0 +1,47 @@
+2026-04-05:
+  R EG: Roman Hendricks
+  Keys: Shady Hannoush
+  Bass: Stephen Di Perri
+  Drums: Devin Forkel
+  AG1: Gary Strohschein
+  EG1: Zachary Hutchens
+  AG2: Empty
+  EG2: Empty
+  MD: Zachary Hutchens
+  Eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Ben Jones, Eric Domingo
+
+2026-04-12:
+  R EG: Roman Hendricks
+  Keys: Shady Hannoush
+  Bass: Adam Davis
+  Drums: Ben Jones
+  AG1: Gary Strohschein
+  EG1: Zachary Hutchens
+  AG2: Empty
+  EG2: Empty
+  MD: Zachary Hutchens
+  Eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Erin Davis, Eric Domingo
+
+2026-04-19:
+  R EG: Roman Hendricks
+  Keys: Shady Hannoush
+  Bass: Stephen Di Perri
+  Drums: Devin Forkel
+  AG1: Gary Strohschein
+  EG1: Zachary Hutchens
+  AG2: Empty
+  EG2: Empty
+  MD: Zachary Hutchens
+  Eligible but unassigned: Luke Harris, Mandy Johnson, Erin Davis, Eric Domingo
+
+2026-04-26:
+  R EG: Roman Hendricks
+  Keys: Mandy Johnson
+  Bass: Adam Davis
+  Drums: Erin Davis
+  AG1: Empty
+  EG1: Zachary Hutchens
+  AG2: Empty
+  EG2: Empty
+  MD: Zachary Hutchens
+  Eligible but unassigned: Luke Harris, Aaron Brookins, Corey Moser, Eric Domingo

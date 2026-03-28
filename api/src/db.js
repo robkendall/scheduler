@@ -166,11 +166,11 @@ async function initializeSchema() {
   await ensureColumn("positions", "ignore_import", "BOOLEAN NOT NULL DEFAULT FALSE");
   await ensureColumn("positions", "can_double_up", "BOOLEAN NOT NULL DEFAULT FALSE");
 
-  await pool.query(`
-    UPDATE positions
-    SET can_double_up = FALSE
-    WHERE can_double_up IS NULL OR can_double_up != FALSE;
-  `);
+  // await pool.query(`
+  //   UPDATE positions
+  //   SET can_double_up = FALSE
+  //   WHERE can_double_up IS NULL OR can_double_up != FALSE;
+  // `);
 
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS positions_external_mapping_idx
