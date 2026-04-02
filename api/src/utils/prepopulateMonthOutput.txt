@@ -8,40 +8,40 @@
   AG2: Empty
   EG2: Empty
   MD: Zachary Hutchens
-  Eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Ben Jones, Eric Domingo
+  Month-end eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Ben Jones, Eric Domingo
 
 2026-04-12:
   R EG: Roman Hendricks
   Keys: Shady Hannoush
-  Bass: Adam Davis
-  Drums: Ben Jones
+  Bass: Aaron Brookins
+  Drums: Luke Harris
   AG1: Gary Strohschein
-  EG1: Zachary Hutchens
+  EG1: Adam Davis
   AG2: Empty
-  EG2: Empty
+  EG2: Zachary Hutchens
   MD: Zachary Hutchens
-  Eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Erin Davis, Eric Domingo
+  Month-end eligible but unassigned: Mandy Johnson, Corey Moser, Erin Davis, Ben Jones, Eric Domingo
 
 2026-04-19:
   R EG: Roman Hendricks
   Keys: Shady Hannoush
   Bass: Stephen Di Perri
-  Drums: Devin Forkel
+  Drums: Luke Harris
   AG1: Gary Strohschein
   EG1: Zachary Hutchens
   AG2: Empty
   EG2: Empty
   MD: Zachary Hutchens
-  Eligible but unassigned: Luke Harris, Mandy Johnson, Erin Davis, Eric Domingo
+  Month-end eligible but unassigned: Mandy Johnson, Erin Davis, Devin Forkel, Eric Domingo
 
 2026-04-26:
   R EG: Roman Hendricks
   Keys: Mandy Johnson
-  Bass: Adam Davis
+  Bass: Aaron Brookins
   Drums: Erin Davis
   AG1: Empty
-  EG1: Zachary Hutchens
+  EG1: Adam Davis
   AG2: Empty
-  EG2: Empty
+  EG2: Zachary Hutchens
   MD: Zachary Hutchens
-  Eligible but unassigned: Luke Harris, Aaron Brookins, Corey Moser, Eric Domingo
+  Month-end eligible but unassigned: Luke Harris, Corey Moser, Eric Domingo

@@ -135,15 +135,27 @@ async function initializeSchema() {
       person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
       start_date DATE NOT NULL,
       end_date DATE NOT NULL,
+      external_source TEXT,
+      external_blockout_id TEXT,
+      external_blockout_date_id TEXT,
       created_at TIMESTAMP DEFAULT NOW(),
       updated_at TIMESTAMP DEFAULT NOW(),
       CHECK (start_date <= end_date)
     );
   `);
 
+  await ensureColumn("blocked_out", "external_source", "TEXT");
+  await ensureColumn("blocked_out", "external_blockout_id", "TEXT");
+  await ensureColumn("blocked_out", "external_blockout_date_id", "TEXT");
+
   await pool.query(`
     CREATE INDEX IF NOT EXISTS blocked_out_person_idx
     ON blocked_out(person_id, start_date, end_date);
+  `);
+
+  await pool.query(`
+    CREATE INDEX IF NOT EXISTS blocked_out_external_idx
+    ON blocked_out(person_id, external_source, external_blockout_id, external_blockout_date_id);
   `);
 
   await pool.query(`

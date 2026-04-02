@@ -25,9 +25,18 @@ import {
     getPlanningCenterTeams,
     getRoles,
     importPlanningCenterRole,
+    syncPlanningCenterRoleBlockouts,
     updateRole,
 } from "../api/scheduler";
 import PageShell from "../components/PageShell";
+
+function formatImportSummary(roleName, result) {
+    return `${roleName}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`;
+}
+
+function formatBlockoutSyncSummary(roleName, result) {
+    return `${roleName}: future blockouts synced for ${result.sync.peopleSeen} people, ${result.sync.futureRemoteRanges} remote ranges seen, ${result.sync.inserted} inserted, ${result.sync.updated} updated, ${result.sync.deleted} deleted, ${result.sync.matchedLegacy} matched legacy rows`;
+}
 
 function PlanningCenterAdmin() {
     const [error, setError] = useState("");
@@ -165,7 +174,24 @@ function PlanningCenterAdmin() {
         try {
             const result = await importPlanningCenterRole(role.id);
             setImportSummary((prev) => [
-                `${role.name}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`,
+                formatImportSummary(role.name, result),
+                ...prev,
+            ].slice(0, 12));
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBusyKey("");
+        }
+    }
+
+    async function syncRoleBlockouts(role) {
+        setBusyKey(`sync-blockouts-${role.id}`);
+        setError("");
+
+        try {
+            const result = await syncPlanningCenterRoleBlockouts(role.id);
+            setImportSummary((prev) => [
+                formatBlockoutSyncSummary(role.name, result),
                 ...prev,
             ].slice(0, 12));
         } catch (requestError) {
@@ -182,10 +208,10 @@ function PlanningCenterAdmin() {
         try {
             for (const role of mappedRoles) {
                 // Keep imports deterministic and easy to troubleshoot.
-                 
+
                 const result = await importPlanningCenterRole(role.id);
                 setImportSummary((prev) => [
-                    `${role.name}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`,
+                    formatImportSummary(role.name, result),
                     ...prev,
                 ].slice(0, 12));
             }
@@ -315,6 +341,14 @@ function PlanningCenterAdmin() {
                                             disabled={Boolean(busyKey)}
                                         >
                                             {busyKey === `save-${role.id}` ? "Saving..." : "Save mapping"}
+                                        </Button>
+                                        <Button
+                                            size="small"
+                                            variant="outlined"
+                                            onClick={() => syncRoleBlockouts(role)}
+                                            disabled={Boolean(busyKey)}
+                                        >
+                                            {busyKey === `sync-blockouts-${role.id}` ? "Syncing..." : "Sync future blockouts"}
                                         </Button>
                                         <Button
                                             size="small"

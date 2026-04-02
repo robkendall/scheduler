@@ -15,7 +15,7 @@
       "AG2",
       "EG2"
     ],
-    "eligible_but_unassigned": [
+    "month_end_eligible_unassigned": [
       "Luke Harris",
       "Mandy Johnson",
       "Aaron Brookins",
@@ -23,40 +23,38 @@
       "Ben Jones",
       "Eric Domingo"
     ],
-    "available_but_no_fit": []
+    "month_end_available_no_open_fit": []
   },
   "2026-04-12": {
     "assignments": {
       "R EG": "Roman Hendricks",
       "Keys": "Shady Hannoush",
-      "Bass": "Adam Davis",
-      "Drums": "Ben Jones",
+      "Bass": "Aaron Brookins",
+      "Drums": "Luke Harris",
       "AG1": "Gary Strohschein",
-      "EG1": "Zachary Hutchens",
+      "EG1": "Adam Davis",
       "AG2": "Empty",
-      "EG2": "Empty",
+      "EG2": "Zachary Hutchens",
       "MD": "Zachary Hutchens"
     },
     "unfilled": [
-      "AG2",
-      "EG2"
+      "AG2"
     ],
-    "eligible_but_unassigned": [
-      "Luke Harris",
+    "month_end_eligible_unassigned": [
       "Mandy Johnson",
-      "Aaron Brookins",
       "Corey Moser",
       "Erin Davis",
+      "Ben Jones",
       "Eric Domingo"
     ],
-    "available_but_no_fit": []
+    "month_end_available_no_open_fit": []
   },
   "2026-04-19": {
     "assignments": {
       "R EG": "Roman Hendricks",
       "Keys": "Shady Hannoush",
       "Bass": "Stephen Di Perri",
-      "Drums": "Devin Forkel",
+      "Drums": "Luke Harris",
       "AG1": "Gary Strohschein",
       "EG1": "Zachary Hutchens",
       "AG2": "Empty",
@@ -67,37 +65,35 @@
       "AG2",
       "EG2"
     ],
-    "eligible_but_unassigned": [
-      "Luke Harris",
+    "month_end_eligible_unassigned": [
       "Mandy Johnson",
       "Erin Davis",
+      "Devin Forkel",
       "Eric Domingo"
     ],
-    "available_but_no_fit": []
+    "month_end_available_no_open_fit": []
   },
   "2026-04-26": {
     "assignments": {
       "R EG": "Roman Hendricks",
       "Keys": "Mandy Johnson",
-      "Bass": "Adam Davis",
+      "Bass": "Aaron Brookins",
       "Drums": "Erin Davis",
       "AG1": "Empty",
-      "EG1": "Zachary Hutchens",
+      "EG1": "Adam Davis",
       "AG2": "Empty",
-      "EG2": "Empty",
+      "EG2": "Zachary Hutchens",
       "MD": "Zachary Hutchens"
     },
     "unfilled": [
       "AG1",
-      "AG2",
-      "EG2"
+      "AG2"
     ],
-    "eligible_but_unassigned": [
+    "month_end_eligible_unassigned": [
       "Luke Harris",
-      "Aaron Brookins",
       "Corey Moser",
       "Eric Domingo"
     ],
-    "available_but_no_fit": []
+    "month_end_available_no_open_fit": []
   }
 }

@@ -26,7 +26,12 @@ helpers.getAllPositions = async () => dump.positions;
     for (const sunday of sundays) {
         const day = assignments[sunday];
         // Track unfilled positions
-        const dayOutput = { assignments: {}, unfilled: [], eligible_but_unassigned: [], available_but_no_fit: [] };
+        const dayOutput = {
+            assignments: {},
+            unfilled: [],
+            month_end_eligible_unassigned: [],
+            month_end_available_no_open_fit: [],
+        };
         pretty += `\n${sunday}:\n`;
         // 1. Show all positions, mark unfilled as 'Empty'
         for (const pos of allPositions) {
@@ -41,8 +46,8 @@ helpers.getAllPositions = async () => dump.positions;
                 pretty += `  ${pos.name}: ${person ? person.name : personId}\n`;
             }
         }
-        // 2. Find eligible but unassigned
-        // A person is eligible if they pass hard filters for any position, but are not assigned anywhere that day
+        // 2. Month-end diagnostics (after full month assignment exists)
+        // This intentionally uses full-month totals for max_weeks checks.
         const assignedIds = Object.values(day).filter(Boolean);
         const weekNum = helpers.getWeekNumber(sunday);
         for (const person of allPeople) {
@@ -60,15 +65,15 @@ helpers.getAllPositions = async () => dump.positions;
                 if (isNormalWeek && !isBlocked && underMax && qualified && !assignedIds.includes(person.id)) eligible = true;
             }
             if (eligible) {
-                dayOutput.eligible_but_unassigned.push(person.name);
+                dayOutput.month_end_eligible_unassigned.push(person.name);
             } else if (available) {
-                dayOutput.available_but_no_fit.push(person.name);
+                dayOutput.month_end_available_no_open_fit.push(person.name);
             }
         }
-        if (dayOutput.eligible_but_unassigned.length)
-            pretty += `  Eligible but unassigned: ${dayOutput.eligible_but_unassigned.join(', ')}\n`;
-        if (dayOutput.available_but_no_fit.length)
-            pretty += `  Available but no open fit: ${dayOutput.available_but_no_fit.join(', ')}\n`;
+        if (dayOutput.month_end_eligible_unassigned.length)
+            pretty += `  Month-end eligible but unassigned: ${dayOutput.month_end_eligible_unassigned.join(', ')}\n`;
+        if (dayOutput.month_end_available_no_open_fit.length)
+            pretty += `  Month-end available but no open fit: ${dayOutput.month_end_available_no_open_fit.join(', ')}\n`;
         output[sunday] = dayOutput;
     }
     fs.writeFileSync(

@@ -93,6 +93,12 @@ export function importPlanningCenterRole(roleId) {
   });
 }
 
+export function syncPlanningCenterRoleBlockouts(roleId) {
+  return request(`/api/roles/${roleId}/sync-planning-center-blockouts`, {
+    method: "POST",
+  });
+}
+
 export function createRole(payload) {
   return request("/api/roles", {
     method: "POST",

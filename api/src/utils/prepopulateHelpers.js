@@ -1,6 +1,19 @@
 // scheduler/api/src/utils/prepopulateHelpers.js
 // Stubs for test and real use. Replace with DB queries in production.
 
+function pad2(n) {
+    return String(n).padStart(2, '0');
+}
+
+function formatYmdLocal(dateObj) {
+    return `${dateObj.getFullYear()}-${pad2(dateObj.getMonth() + 1)}-${pad2(dateObj.getDate())}`;
+}
+
+function parseYmdLocal(ymd) {
+    const [year, month, day] = String(ymd).split('-').map(Number);
+    return new Date(year, month - 1, day);
+}
+
 /**
  * Returns all Sundays in a given month/year as ISO date strings.
  * @param {number} month - 1-based
@@ -13,7 +26,8 @@ function getSundaysInMonth(month, year) {
     // Find first Sunday
     while (d.getDay() !== 0) d.setDate(d.getDate() + 1);
     while (d.getMonth() === month - 1) {
-        sundays.push(d.toISOString().slice(0, 10));
+        // Keep date-only local semantics (YYYY-MM-DD); do not convert through UTC.
+        sundays.push(formatYmdLocal(d));
         d.setDate(d.getDate() + 7);
     }
     return sundays;
@@ -25,33 +39,37 @@ function getSundaysInMonth(month, year) {
  * @returns {number}
  */
 function getWeekNumber(date) {
-    const d = new Date(date);
+    const isYmd = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date);
+    const d = isYmd ? parseYmdLocal(date) : new Date(date);
     return Math.floor((d.getDate() - 1) / 7) + 1;
 }
 
 /**
  * Returns all people (stub for DB)
+ * @param {number} [roleId=3]
  */
-async function getAllPeople() {
-    // Only return people for role_id 3
+async function getAllPeople(roleId = 3) {
     const pool = require('../db');
     const peopleRows = (await pool.query(`
         SELECT p.id, p.name, p.max_weeks_per_month, p.include_in_auto_schedule
         FROM people p
-        WHERE p.include_in_auto_schedule = TRUE AND p.role_id = 3
+        WHERE p.include_in_auto_schedule = TRUE AND p.role_id = $1
         ORDER BY p.id
-    `)).rows;
+    `, [roleId])).rows;
     if (peopleRows.length === 0) return [];
-    const ids = peopleRows.map(p => p.id).join(',');
-    const normalWeeksRows = (await pool.query(`
-        SELECT person_id, week_number FROM normal_weeks WHERE person_id IN (${ids})
-    `)).rows;
-    const qualifiedRows = (await pool.query(`
-        SELECT person_id, position_id FROM person_positions WHERE person_id IN (${ids})
-    `)).rows;
-    const blockOutRows = (await pool.query(`
-        SELECT person_id, start_date, end_date FROM blocked_out WHERE person_id IN (${ids})
-    `)).rows;
+    const ids = peopleRows.map(p => p.id);
+    const normalWeeksRows = (await pool.query(
+        'SELECT person_id, week_number FROM normal_weeks WHERE person_id = ANY($1::int[])',
+        [ids]
+    )).rows;
+    const qualifiedRows = (await pool.query(
+        'SELECT person_id, position_id FROM person_positions WHERE person_id = ANY($1::int[])',
+        [ids]
+    )).rows;
+    const blockOutRows = (await pool.query(
+        'SELECT person_id, start_date, end_date FROM blocked_out WHERE person_id = ANY($1::int[])',
+        [ids]
+    )).rows;
     // Compose
     return peopleRows.map(p => ({
         id: p.id,
@@ -65,18 +83,20 @@ async function getAllPeople() {
 
 /**
  * Returns all positions (stub for DB)
+ * @param {number} [roleId=3]
  */
-async function getAllPositions() {
-    // Only return positions for role_id 3
+async function getAllPositions(roleId = 3) {
     const pool = require('../db');
-    const posRows = (await pool.query(`
-        SELECT id, name, required, priority, can_double_up FROM positions WHERE soft_deleted = FALSE AND role_id = 3 ORDER BY priority
-    `)).rows;
+    const posRows = (await pool.query(
+        'SELECT id, name, required, priority, can_double_up FROM positions WHERE soft_deleted = FALSE AND role_id = $1 ORDER BY priority',
+        [roleId]
+    )).rows;
     if (posRows.length === 0) return [];
-    const ids = posRows.map(p => p.id).join(',');
-    const orderRows = (await pool.query(`
-        SELECT position_id, person_id, rank_order FROM position_person_order WHERE position_id IN (${ids}) ORDER BY position_id, rank_order
-    `)).rows;
+    const ids = posRows.map(p => p.id);
+    const orderRows = (await pool.query(
+        'SELECT position_id, person_id, rank_order FROM position_person_order WHERE position_id = ANY($1::int[]) ORDER BY position_id, rank_order',
+        [ids]
+    )).rows;
     return posRows.map(pos => {
         const priorityList = orderRows.filter(o => o.position_id === pos.id && o.person_id !== null).sort((a, b) => a.rank_order - b.rank_order).map(o => o.person_id);
         return {

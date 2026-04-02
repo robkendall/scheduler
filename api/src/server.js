@@ -7,6 +7,7 @@ const pgSession = require("connect-pg-simple")(session);
 
 const pool = require("./db");
 const { makePlanningCenterClient } = require("./planningCenter");
+const { prePopulateMonth } = require("./prepopulateMonth");
 const requireAuth = require("./middleware/auth");
 
 const app = express();
@@ -180,10 +181,6 @@ function sundayDatesForMonth(year, monthZeroBased) {
   }
 
   return dates;
-}
-
-function isDateBlocked(date, blocks) {
-  return blocks.some((block) => date >= block.start_date && date <= block.end_date);
 }
 
 async function refreshSessionUser(req) {
@@ -621,6 +618,183 @@ function getPlanningCenterClient() {
   });
 }
 
+async function loadPlanningCenterMappedRole(roleId) {
+  const roleResult = await pool.query(
+    `SELECT id, name, external_source, external_role_kind, external_role_id
+     FROM roles
+     WHERE id = $1`,
+    [roleId],
+  );
+
+  const role = roleResult.rows[0] || null;
+  if (!role) {
+    const error = new Error("Role not found.");
+    error.status = 404;
+    throw error;
+  }
+
+  if (role.external_source !== "planning_center" || role.external_role_kind !== "services_team" || !role.external_role_id) {
+    const error = new Error("Role must be mapped to Planning Center Services Team (externalSource=planning_center, externalRoleKind=services_team, externalRoleId=<team id>)."
+    );
+    error.status = 400;
+    throw error;
+  }
+
+  return role;
+}
+
+function planningCenterBlockoutKey(personId, externalBlockoutId, externalBlockoutDateId) {
+  return `${personId}:${externalBlockoutId || ""}:${externalBlockoutDateId || ""}`;
+}
+
+function planningCenterBlockoutRangeKey(personId, startDate, endDate) {
+  return `${personId}:${startDate}:${endDate}`;
+}
+
+async function syncPlanningCenterBlockedOutDates(client, roleId, localPersonIdByExternal, blockoutRangesByPerson) {
+  const today = new Date().toISOString().slice(0, 10);
+  const importedPersonIds = [...new Set([...localPersonIdByExternal.values()])];
+  const remoteByKey = new Map();
+
+  for (const [externalPersonId, ranges] of blockoutRangesByPerson.entries()) {
+    const personId = localPersonIdByExternal.get(externalPersonId);
+    if (!personId) {
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    for (const range of ranges) {
+      if (!range?.externalBlockoutId || range.endDate < today) {
+        // eslint-disable-next-line no-continue
+        continue;
+      }
+
+      const key = planningCenterBlockoutKey(personId, range.externalBlockoutId, range.externalBlockoutDateId);
+      remoteByKey.set(key, {
+        personId,
+        startDate: range.startDate,
+        endDate: range.endDate,
+        externalBlockoutId: range.externalBlockoutId,
+        externalBlockoutDateId: range.externalBlockoutDateId || null,
+      });
+    }
+  }
+
+  if (importedPersonIds.length === 0) {
+    return {
+      futureRemoteRanges: remoteByKey.size,
+      inserted: 0,
+      updated: 0,
+      deleted: 0,
+      matchedLegacy: 0,
+    };
+  }
+
+  const trackedExistingResult = await client.query(
+    `SELECT b.id, b.person_id, b.start_date, b.end_date, b.external_blockout_id, b.external_blockout_date_id
+     FROM blocked_out b
+     JOIN people p ON p.id = b.person_id
+     WHERE p.role_id = $1
+       AND b.person_id = ANY($2::int[])
+       AND b.end_date >= $3
+       AND b.external_source = 'planning_center'`,
+    [roleId, importedPersonIds, today],
+  );
+  const trackedByKey = new Map(
+    trackedExistingResult.rows.map((row) => [
+      planningCenterBlockoutKey(row.person_id, row.external_blockout_id, row.external_blockout_date_id),
+      row,
+    ]),
+  );
+
+  const legacyRowsResult = await client.query(
+    `SELECT id, person_id, start_date, end_date
+     FROM blocked_out
+     WHERE person_id = ANY($1::int[])
+       AND end_date >= $2
+       AND external_source IS NULL`,
+    [importedPersonIds, today],
+  );
+  const legacyByRangeKey = new Map();
+  legacyRowsResult.rows.forEach((row) => {
+    const key = planningCenterBlockoutRangeKey(row.person_id, row.start_date, row.end_date);
+    if (!legacyByRangeKey.has(key)) {
+      legacyByRangeKey.set(key, row);
+    }
+  });
+
+  let inserted = 0;
+  let updated = 0;
+  let matchedLegacy = 0;
+
+  for (const [key, remote] of remoteByKey.entries()) {
+    const existing = trackedByKey.get(key);
+    if (existing) {
+      if (existing.start_date !== remote.startDate || existing.end_date !== remote.endDate) {
+        await client.query(
+          `UPDATE blocked_out
+           SET start_date = $1,
+               end_date = $2,
+               updated_at = NOW()
+           WHERE id = $3`,
+          [remote.startDate, remote.endDate, existing.id],
+        );
+        updated += 1;
+      }
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    const legacyKey = planningCenterBlockoutRangeKey(remote.personId, remote.startDate, remote.endDate);
+    const legacy = legacyByRangeKey.get(legacyKey);
+    if (legacy) {
+      await client.query(
+        `UPDATE blocked_out
+         SET external_source = 'planning_center',
+             external_blockout_id = $1,
+             external_blockout_date_id = $2,
+             updated_at = NOW()
+         WHERE id = $3`,
+        [remote.externalBlockoutId, remote.externalBlockoutDateId, legacy.id],
+      );
+      matchedLegacy += 1;
+      legacyByRangeKey.delete(legacyKey);
+      // eslint-disable-next-line no-continue
+      continue;
+    }
+
+    await client.query(
+      `INSERT INTO blocked_out (
+         person_id,
+         start_date,
+         end_date,
+         external_source,
+         external_blockout_id,
+         external_blockout_date_id
+       )
+       VALUES ($1, $2, $3, 'planning_center', $4, $5)`,
+      [remote.personId, remote.startDate, remote.endDate, remote.externalBlockoutId, remote.externalBlockoutDateId],
+    );
+    inserted += 1;
+  }
+
+  const deleteIds = trackedExistingResult.rows
+    .filter((row) => !remoteByKey.has(planningCenterBlockoutKey(row.person_id, row.external_blockout_id, row.external_blockout_date_id)))
+    .map((row) => row.id);
+
+  if (deleteIds.length > 0) {
+    await client.query("DELETE FROM blocked_out WHERE id = ANY($1::int[])", [deleteIds]);
+  }
+
+  return {
+    futureRemoteRanges: remoteByKey.size,
+    inserted,
+    updated,
+    deleted: deleteIds.length,
+    matchedLegacy,
+  };
+}
+
 app.get("/api/planning-center/health", requireAdmin, async (_req, res) => {
   try {
     const planningCenterClient = getPlanningCenterClient();
@@ -762,25 +936,12 @@ app.post("/api/roles/:id/import-planning-center", requireAdmin, async (req, res)
 
   let role;
   try {
-    const roleResult = await pool.query(
-      `SELECT id, name, external_source, external_role_kind, external_role_id
-       FROM roles
-       WHERE id = $1`,
-      [roleId],
-    );
-    role = roleResult.rows[0];
+    role = await loadPlanningCenterMappedRole(roleId);
   } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
     return handleServerError(res, "Failed to load role mapping", error);
-  }
-
-  if (!role) {
-    return res.status(404).json({ error: "Role not found." });
-  }
-
-  if (role.external_source !== "planning_center" || role.external_role_kind !== "services_team" || !role.external_role_id) {
-    return res.status(400).json({
-      error: "Role must be mapped to Planning Center Services Team (externalSource=planning_center, externalRoleKind=services_team, externalRoleId=<team id>).",
-    });
   }
 
   let bundle;
@@ -936,9 +1097,16 @@ app.post("/api/roles/:id/import-planning-center", requireAdmin, async (req, res)
         }
 
         await client.query(
-          `INSERT INTO blocked_out (person_id, start_date, end_date)
-           VALUES ($1, $2, $3)`,
-          [personId, range.startDate, range.endDate],
+          `INSERT INTO blocked_out (
+             person_id,
+             start_date,
+             end_date,
+             external_source,
+             external_blockout_id,
+             external_blockout_date_id
+           )
+           VALUES ($1, $2, $3, 'planning_center', $4, $5)`,
+          [personId, range.startDate, range.endDate, range.externalBlockoutId || null, range.externalBlockoutDateId || null],
         );
         blockedOutInserted += 1;
       }
@@ -1072,6 +1240,84 @@ app.post("/api/roles/:id/import-planning-center", requireAdmin, async (req, res)
   } catch (error) {
     await client.query("ROLLBACK");
     return handleServerError(res, "Planning Center import failed", error);
+  } finally {
+    client.release();
+  }
+});
+
+app.post("/api/roles/:id/sync-planning-center-blockouts", requireAdmin, async (req, res) => {
+  const roleId = parsePositiveInt(req.params.id);
+  if (!roleId) {
+    return res.status(400).json({ error: "Valid role ID is required." });
+  }
+
+  let role;
+  try {
+    role = await loadPlanningCenterMappedRole(roleId);
+  } catch (error) {
+    if (error.status) {
+      return res.status(error.status).json({ error: error.message });
+    }
+    return handleServerError(res, "Failed to load role mapping", error);
+  }
+
+  let blockoutBundle;
+  try {
+    const planningCenterClient = getPlanningCenterClient();
+    blockoutBundle = await planningCenterClient.loadTeamBlockoutBundle(role.external_role_id);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const localPersonIdByExternal = new Map();
+    for (const person of blockoutBundle.people) {
+      const result = await client.query(
+        `INSERT INTO people (
+           name,
+           include_in_auto_schedule,
+           role_id,
+           external_source,
+           external_person_id,
+           updated_at
+         )
+         VALUES ($1, TRUE, $2, 'planning_center', $3, NOW())
+         ON CONFLICT (role_id, external_source, external_person_id)
+         DO UPDATE SET
+           name = EXCLUDED.name,
+           updated_at = NOW()
+         RETURNING id`,
+        [person.name, role.id, person.id],
+      );
+
+      localPersonIdByExternal.set(person.id, result.rows[0].id);
+    }
+
+    const syncSummary = await syncPlanningCenterBlockedOutDates(
+      client,
+      role.id,
+      localPersonIdByExternal,
+      blockoutBundle.blockoutRangesByPerson,
+    );
+
+    await client.query("COMMIT");
+
+    return res.json({
+      ok: true,
+      roleId: role.id,
+      roleName: role.name,
+      sync: {
+        peopleSeen: blockoutBundle.people.length,
+        ...syncSummary,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return handleServerError(res, "Planning Center blockout sync failed", error);
   } finally {
     client.release();
   }
@@ -2631,7 +2877,7 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     await client.query("BEGIN");
 
     const [peopleResult, positionsResult, normalWeeksResult, blockedResult, personPositionsResult, positionPeopleOrderResult] = await Promise.all([
-      client.query("SELECT id, name FROM people WHERE include_in_auto_schedule = TRUE AND role_id = $1 ORDER BY id ASC", [roleId]),
+      client.query("SELECT id, name, max_weeks_per_month FROM people WHERE include_in_auto_schedule = TRUE AND role_id = $1 ORDER BY id ASC", [roleId]),
       client.query("SELECT id, name, required, priority, can_double_up FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC", [roleId]),
       client.query(
         `SELECT nw.person_id, nw.week_number
@@ -2672,6 +2918,7 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     positions.forEach((pos) => {
       canDoubleUpByPosition.set(pos.id, !!pos.can_double_up);
     });
+    const positionsById = new Map(positions.map((position) => [position.id, position]));
 
     if (people.length === 0 || positions.length === 0) {
       await client.query("ROLLBACK");
@@ -2694,12 +2941,12 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
       blockedByPerson.get(row.person_id).push(row);
     });
 
-    const rankByPosition = new Map();
+    const qualifiedPositionsByPerson = new Map();
     personPositionsResult.rows.forEach((row) => {
-      if (!rankByPosition.has(row.position_id)) {
-        rankByPosition.set(row.position_id, new Map());
+      if (!qualifiedPositionsByPerson.has(row.person_id)) {
+        qualifiedPositionsByPerson.set(row.person_id, []);
       }
-      rankByPosition.get(row.position_id).set(row.person_id, row.rank_order);
+      qualifiedPositionsByPerson.get(row.person_id).push(row.position_id);
     });
 
     // Position-level people order: for each position, ordered list with null = "Everyone Else"
@@ -2747,8 +2994,19 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
 
     const assignedBySchedule = new Map();
     const peopleById = new Map(people.map((person) => [person.id, person]));
+    const initialAssignmentsByDate = {};
+    const initialWorkCounts = {};
 
     existingAssignmentsResult.rows.forEach((row) => {
+      if (!initialAssignmentsByDate[row.track_date]) {
+        initialAssignmentsByDate[row.track_date] = {};
+      }
+      initialAssignmentsByDate[row.track_date][row.position_id] = row.person_id;
+
+      if (!canDoubleUpByPosition.get(row.position_id)) {
+        initialWorkCounts[row.person_id] = (initialWorkCounts[row.person_id] || 0) + 1;
+      }
+
       if (!assignedBySchedule.has(row.schedule_id)) {
         assignedBySchedule.set(row.schedule_id, {
           personIds: new Set(),
@@ -2761,119 +3019,41 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
 
     const createdAssignments = [];
 
-    function getEligiblePeople(date, weekNumber, positionId, assignedPersonIds) {
-      const rankMap = rankByPosition.get(positionId) || new Map();
-      const posOrder = personOrderByPosition.get(positionId) || [];
-      const everyoneElseRank = posOrder.find((item) => item.person_id === null)?.rank_order ?? 0;
+    const transformedPeople = people.map((person) => ({
+      id: person.id,
+      name: person.name,
+      normal_weeks: [...(weeksByPerson.get(person.id) || [])],
+      max_weeks: person.max_weeks_per_month,
+      qualified_positions: qualifiedPositionsByPerson.get(person.id) || [],
+      block_outs: (blockedByPerson.get(person.id) || []).map((row) => ({
+        start: row.start_date,
+        end: row.end_date,
+      })),
+    }));
 
-      return people.filter((person) => {
-        const availableWeeks = weeksByPerson.get(person.id);
-        if (!availableWeeks?.has(weekNumber)) {
-          return false;
-        }
+    const transformedPositions = positions.map((position) => ({
+      id: position.id,
+      name: position.name,
+      rank: position.priority,
+      is_required: position.required,
+      can_be_doubled_up: !!position.can_double_up,
+      priority_list: (personOrderByPosition.get(position.id) || [])
+        .filter((item) => item.person_id !== null)
+        .map((item) => item.person_id),
+    }));
 
-        if (!rankMap.has(person.id)) {
-          return false;
-        }
-
-        // Check double up logic
-        if (assignedPersonIds.has(person.id)) {
-          // Find all positions this person is already assigned to for this week
-          // assignedPersonIds is a Set of personIds, but we need to know which positions
-          // We'll need to pass in assignedState or track assignments differently
-          // Instead, let's pass in assignedState to getEligiblePeople
-          // For now, fallback: block unless current position or any assigned position is double up
-          // We'll fix this below in buildOptimalAssignments
-          return false; // placeholder, will fix below
-        }
-
-        const blocks = blockedByPerson.get(person.id) || [];
-        return !isDateBlocked(date, blocks);
-      }).sort((left, right) => {
-        // Sort by position-level people order for tie-breaking
-        const leftEntry = posOrder.find((item) => item.person_id === left.id);
-        const rightEntry = posOrder.find((item) => item.person_id === right.id);
-
-        const leftRank = leftEntry !== undefined ? leftEntry.rank_order : everyoneElseRank;
-        const rightRank = rightEntry !== undefined ? rightEntry.rank_order : everyoneElseRank;
-
-        return leftRank - rightRank;
-      });
-    }
-
-    function buildOptimalAssignments(date, weekNumber, assignedState) {
-      const assignments = [];
-      const remainingPositions = positions
-        .filter((position) => !assignedState.positionIds.has(position.id))
-        .sort((left, right) => left.priority - right.priority || left.id - right.id);
-
-      // Greedy approach: fill positions in priority order
-      // Track: personId -> array of assigned positionIds for this week
-      const assignedPositionsByPerson = new Map();
-      for (const pid of assignedState.personIds) {
-        assignedPositionsByPerson.set(pid, []);
-      }
-      for (const posid of assignedState.positionIds) {
-        // We don't have a direct mapping of personId <-> positionId for this week in assignedState
-        // So we need to build it as we assign
-        // We'll build it as we go below
-      }
-
-      for (const position of remainingPositions) {
-        // Build eligiblePeople with double up logic
-        const eligiblePeople = people.filter((person) => {
-          const availableWeeks = weeksByPerson.get(person.id);
-          if (!availableWeeks?.has(weekNumber)) {
-            return false;
-          }
-          if (!rankByPosition.get(position.id)?.has(person.id)) {
-            return false;
-          }
-          // Double up logic:
-          const alreadyAssignedPositions = assignedPositionsByPerson.get(person.id) || [];
-          if (alreadyAssignedPositions.length > 0) {
-            // Allow if EITHER this position OR any already assigned position is double up
-            const thisIsDouble = !!canDoubleUpByPosition.get(position.id);
-            const anyOtherIsDouble = alreadyAssignedPositions.some((pid) => canDoubleUpByPosition.get(pid));
-            if (!(thisIsDouble || anyOtherIsDouble)) {
-              return false;
-            }
-          }
-          const blocks = blockedByPerson.get(person.id) || [];
-          return !isDateBlocked(date, blocks);
-        }).sort((left, right) => {
-          // Sort by position-level people order for tie-breaking
-          const posOrder = personOrderByPosition.get(position.id) || [];
-          const everyoneElseRank = posOrder.find((item) => item.person_id === null)?.rank_order ?? 0;
-          const leftEntry = posOrder.find((item) => item.person_id === left.id);
-          const rightEntry = posOrder.find((item) => item.person_id === right.id);
-          const leftRank = leftEntry !== undefined ? leftEntry.rank_order : everyoneElseRank;
-          const rightRank = rightEntry !== undefined ? rightEntry.rank_order : everyoneElseRank;
-          return leftRank - rightRank;
-        });
-
-        if (eligiblePeople.length > 0) {
-          const selectedPerson = eligiblePeople[0];
-          assignments.push({
-            person: selectedPerson,
-            position,
-          });
-          assignedState.personIds.add(selectedPerson.id);
-          assignedState.positionIds.add(position.id);
-          // Track assignment for double up logic
-          if (!assignedPositionsByPerson.has(selectedPerson.id)) {
-            assignedPositionsByPerson.set(selectedPerson.id, []);
-          }
-          assignedPositionsByPerson.get(selectedPerson.id).push(position.id);
-        }
-      }
-
-      return assignments;
-    }
+    const computedAssignments = await prePopulateMonth(bounds.monthZeroBased + 1, bounds.year, {
+      sundays: sundayDates,
+      peoplePool: transformedPeople,
+      rankedPositions: transformedPositions,
+      initialAssignments: initialAssignmentsByDate,
+      initialWorkCounts,
+      roleId,
+      warn: (message) => console.warn(message),
+    });
 
     for (const date of sundayDates) {
       const schedule = scheduleByDate.get(date);
-      const weekNumber = schedule.week_number;
       const assigned = assignedBySchedule.get(schedule.id) || {
         personIds: new Set(),
         positionIds: new Set(),
@@ -2883,13 +3063,23 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
         assignedBySchedule.set(schedule.id, assigned);
       }
 
-      const optimizedAssignments = buildOptimalAssignments(date, weekNumber, assigned);
+      const dayAssignments = computedAssignments[date] || {};
+      for (const [positionIdText, personId] of Object.entries(dayAssignments)) {
+        const positionId = Number(positionIdText);
+        if (assigned.positionIds.has(positionId)) {
+          continue;
+        }
 
-      for (const assignment of optimizedAssignments) {
-        const selectedPerson = peopleById.get(assignment.person.id);
+        const selectedPerson = peopleById.get(personId);
+        const selectedPosition = positionsById.get(positionId);
         if (!selectedPerson) {
           // Defensive guard if the person vanished mid-transaction.
           // This should not happen in normal flow.
+          // eslint-disable-next-line no-continue
+          continue;
+        }
+        if (!selectedPosition) {
+          // Defensive guard if the position vanished mid-transaction.
           // eslint-disable-next-line no-continue
           continue;
         }
@@ -2898,19 +3088,19 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
           `INSERT INTO people_schedule (schedule_id, person_id, position_id)
            VALUES ($1, $2, $3)
            RETURNING id, schedule_id, person_id, position_id`,
-          [schedule.id, selectedPerson.id, assignment.position.id],
+          [schedule.id, selectedPerson.id, positionId],
         );
 
         assigned.personIds.add(selectedPerson.id);
-        assigned.positionIds.add(assignment.position.id);
+        assigned.positionIds.add(positionId);
 
         createdAssignments.push({
           ...insertAssignmentResult.rows[0],
           trackDate: date,
-          weekNumber,
+          weekNumber: schedule.week_number,
           personName: selectedPerson.name,
-          positionName: assignment.position.name,
-          positionPriority: assignment.position.priority,
+          positionName: selectedPosition.name,
+          positionPriority: selectedPosition.priority,
         });
       }
     }

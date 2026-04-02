@@ -7,18 +7,21 @@ const helpers = require('./utils/prepopulateHelpers');
  * Pre-populate assignments for a given month and year.
  * @param {number} month - 1-based month (1=January)
  * @param {number} year
+ * @param {Object} [options]
  * @returns {Object} assignments - { [sundayDate]: { [positionId]: personId } }
  */
-async function prePopulateMonth(month, year) {
+async function prePopulateMonth(month, year, options = {}) {
     // 1. SETUP
-    const sundays = await helpers.getSundaysInMonth(month, year);
-    const peoplePool = await helpers.getAllPeople();
-    let rankedPositions = await helpers.getAllPositions();
-    rankedPositions = rankedPositions.sort((a, b) => a.rank - b.rank);
+    const sundays = options.sundays || await helpers.getSundaysInMonth(month, year);
+    const peoplePool = options.peoplePool || await helpers.getAllPeople(options.roleId);
+    let rankedPositions = options.rankedPositions || await helpers.getAllPositions(options.roleId);
+    rankedPositions = rankedPositions.slice().sort((a, b) => a.rank - b.rank);
 
-    const assignments = {};
+    const assignments = cloneAssignments(options.initialAssignments);
     const workCounts = {};
-    peoplePool.forEach(p => { workCounts[p.id] = 0; });
+    const initialWorkCounts = options.initialWorkCounts || {};
+    const warn = options.warn || console.warn;
+    peoplePool.forEach(p => { workCounts[p.id] = initialWorkCounts[p.id] || 0; });
 
     // 2. PHASE 1: FILL STANDARD ROLES (Top-Down by Rank)
     for (const position of rankedPositions) {
@@ -26,6 +29,7 @@ async function prePopulateMonth(month, year) {
         for (const sunday of sundays) {
             const weekNum = helpers.getWeekNumber(sunday);
             if (!assignments[sunday]) assignments[sunday] = {};
+            if (assignments[sunday][position.id]) continue;
             // HARD FILTERS
             let candidates = peoplePool.filter(p =>
                 p.normal_weeks.includes(weekNum) &&
@@ -36,12 +40,12 @@ async function prePopulateMonth(month, year) {
             );
             if (candidates.length === 0) {
                 if (position.is_required) {
-                    console.warn(`Could not fill required position ${position.name} on ${sunday}`);
+                    warn(`Could not fill required position ${position.name} on ${sunday}`);
                 }
                 continue;
             }
             // Scarcity logic
-            const bestPerson = rankByScarcity(candidates, position, sundays, workCounts, assignments, weekNum);
+            const bestPerson = rankByScarcity(candidates, position, sundays, workCounts, assignments);
             assignments[sunday][position.id] = bestPerson.id;
             workCounts[bestPerson.id]++;
         }
@@ -52,6 +56,7 @@ async function prePopulateMonth(month, year) {
         if (!position.can_be_doubled_up) continue;
         for (const sunday of sundays) {
             if (!assignments[sunday]) assignments[sunday] = {};
+            if (assignments[sunday][position.id]) continue;
             const alreadyWorking = Object.values(assignments[sunday]);
             const candidates = peoplePool.filter(p =>
                 alreadyWorking.includes(p.id) &&
@@ -67,18 +72,40 @@ async function prePopulateMonth(month, year) {
     return assignments;
 }
 
+function cloneAssignments(initialAssignments = {}) {
+    return Object.fromEntries(
+        Object.entries(initialAssignments).map(([date, dayAssignments]) => [date, { ...dayAssignments }])
+    );
+}
+
 // --- Helper Functions ---
 function isBlockedOut(person, date) {
     // person.block_outs: [{ start: Date, end: Date }]
     if (!person.block_outs) return false;
-    return person.block_outs.some(range => new Date(date) >= new Date(range.start) && new Date(date) <= new Date(range.end));
+    const day = toYmdLocal(date);
+    return person.block_outs.some(range => {
+        const startDay = toYmdLocal(range.start);
+        const endDay = toYmdLocal(range.end);
+        return day >= startDay && day <= endDay;
+    });
+}
+
+function toYmdLocal(value) {
+    if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)) {
+        return value;
+    }
+    const d = new Date(value);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    return `${yyyy}-${mm}-${dd}`;
 }
 
 function isQualified(person, position) {
     return person.qualified_positions.includes(position.id);
 }
 
-function rankByScarcity(candidates, position, sundays, workCounts, assignments, weekNum) {
+function rankByScarcity(candidates, position, sundays, workCounts, assignments) {
     // Scarcity: prefer people who have fewer eligible weeks left in the month
     // Also use position.priority_list if available
     // Lower scarcity score = more scarce = higher priority

@@ -5,8 +5,9 @@ const fs = require('fs');
 const helpers = require('./prepopulateHelpers');
 
 (async () => {
-    const people = await helpers.getAllPeople();
-    const positions = await helpers.getAllPositions();
+    const roleId = 3;
+    const people = await helpers.getAllPeople(roleId);
+    const positions = await helpers.getAllPositions(roleId);
     const dump = { people, positions };
     fs.writeFileSync(
         __dirname + '/prepopulateDataDump.json',

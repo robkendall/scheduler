@@ -85,6 +85,8 @@ function normalizeDateOnly(value) {
 function blockoutRange(blockoutResource, blockoutDateResource) {
     const blockoutAttrs = blockoutResource?.attributes || {};
     const dateAttrs = blockoutDateResource?.attributes || {};
+    const externalBlockoutId = normalizeText(blockoutResource?.id);
+    const externalBlockoutDateId = normalizeText(blockoutDateResource?.id);
 
     const start = normalizeDateOnly(
         dateAttrs.start_date || dateAttrs.starts_at || dateAttrs.start || dateAttrs.date || blockoutAttrs.start_date || blockoutAttrs.starts_at,
@@ -98,10 +100,20 @@ function blockoutRange(blockoutResource, blockoutDateResource) {
     }
 
     if (start <= end) {
-        return { startDate: start, endDate: end };
+        return {
+            startDate: start,
+            endDate: end,
+            externalBlockoutId,
+            externalBlockoutDateId,
+        };
     }
 
-    return { startDate: end, endDate: start };
+    return {
+        startDate: end,
+        endDate: start,
+        externalBlockoutId,
+        externalBlockoutDateId,
+    };
 }
 
 function weekNumbersFromDates(planDates) {
@@ -113,6 +125,68 @@ function weekNumbersFromDates(planDates) {
         }
     }
     return [...weekSet].sort((a, b) => a - b);
+}
+
+async function loadTeamPeopleAndBlockoutRanges(safeTeamId, paginateWithFallback) {
+    const teamPeople = await paginateWithFallback([
+        `/teams/${safeTeamId}/people?per_page=100`,
+        `/teams/${safeTeamId}/team_members?per_page=100`,
+    ]);
+
+    const people = teamPeople.map((resource) => ({
+        id: resourceIdFromRelationship(resource, "person") || normalizeText(resource.id),
+        name: personDisplayName(resource),
+    })).filter((item) => item.id);
+
+    const blockoutRangesByPerson = new Map();
+
+    for (const person of people) {
+        let personBlockouts = [];
+        try {
+            personBlockouts = await paginateWithFallback([
+                `/people/${person.id}/blockouts?per_page=100`,
+                `https://api.planningcenteronline.com/people/v2/people/${person.id}/blockouts?per_page=100`,
+            ]);
+        } catch (_error) {
+            blockoutRangesByPerson.set(person.id, []);
+            continue;
+        }
+
+        const ranges = [];
+        for (const blockout of personBlockouts) {
+            const blockoutId = normalizeText(blockout.id);
+            if (!blockoutId) {
+                continue;
+            }
+
+            const directRange = blockoutRange(blockout, null);
+            if (directRange) {
+                ranges.push(directRange);
+                continue;
+            }
+
+            let blockoutDates = [];
+            try {
+                blockoutDates = await paginateWithFallback([
+                    `/people/${person.id}/blockouts/${blockoutId}/blockout_dates?per_page=100`,
+                    `https://api.planningcenteronline.com/people/v2/people/${person.id}/blockouts/${blockoutId}/blockout_dates?per_page=100`,
+                ]);
+            } catch (_error) {
+                blockoutDates = [];
+            }
+
+            for (const blockoutDate of blockoutDates) {
+                const range = blockoutRange(blockout, blockoutDate);
+                if (range) {
+                    ranges.push(range);
+                }
+            }
+        }
+
+        blockoutRangesByPerson.set(person.id, ranges);
+    }
+
+    return { people, blockoutRangesByPerson };
 }
 
 function makePlanningCenterClient({ appId, secret, authToken }) {
@@ -161,7 +235,6 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
 
         for (const path of paths) {
             try {
-                // eslint-disable-next-line no-await-in-loop
                 return await paginate(path);
             } catch (error) {
                 lastError = error;
@@ -210,13 +283,10 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
 
             let members = [];
             try {
-                // Team members on a plan are nested under service_type + plan.
-                // eslint-disable-next-line no-await-in-loop
                 members = await paginateWithFallback([
                     `/service_types/${serviceTypeId}/plans/${planId}/team_members?per_page=100`,
                 ]);
             } catch (_error) {
-                // eslint-disable-next-line no-continue
                 continue;
             }
 
@@ -268,23 +338,16 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
             throw new Error("A Planning Center team id is required.");
         }
 
-        const [teamResourcePayload, teamPeople, teamPositions, assignments] = await Promise.all([
+        const [teamResourcePayload, peopleAndBlockouts, teamPositions, assignments] = await Promise.all([
             request(`/teams/${safeTeamId}`),
-            paginateWithFallback([
-                `/teams/${safeTeamId}/people?per_page=100`,
-                `/teams/${safeTeamId}/team_members?per_page=100`,
-            ]),
+            loadTeamPeopleAndBlockoutRanges(safeTeamId, paginateWithFallback),
             paginate(`/teams/${safeTeamId}/team_positions?per_page=100`),
             paginate(`/teams/${safeTeamId}/person_team_position_assignments?per_page=100`),
         ]);
 
         const teamResource = teamResourcePayload?.data || {};
         const teamServiceTypeId = resourceIdFromRelationship(teamResource, "service_type");
-
-        const people = teamPeople.map((resource) => ({
-            id: resourceIdFromRelationship(resource, "person") || normalizeText(resource.id),
-            name: personDisplayName(resource),
-        })).filter((item) => item.id);
+        const { people, blockoutRangesByPerson } = peopleAndBlockouts;
 
         const positions = teamPositions.map((resource) => ({
             id: normalizeText(resource.id),
@@ -295,63 +358,6 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
             personId: resourceIdFromRelationship(resource, "person"),
             positionId: resourceIdFromRelationship(resource, "team_position"),
         })).filter((item) => item.personId && item.positionId);
-
-        const blockoutRangesByPerson = new Map();
-
-        for (const person of people) {
-            let personBlockouts = [];
-            try {
-                // Blockouts can be unavailable for some credential scopes/API surfaces.
-                // Keep import functional by treating blockouts as optional.
-                // eslint-disable-next-line no-await-in-loop
-                personBlockouts = await paginateWithFallback([
-                    `/people/${person.id}/blockouts?per_page=100`,
-                    `https://api.planningcenteronline.com/people/v2/people/${person.id}/blockouts?per_page=100`,
-                ]);
-            } catch (_error) {
-                blockoutRangesByPerson.set(person.id, []);
-                // eslint-disable-next-line no-continue
-                continue;
-            }
-            const ranges = [];
-
-            for (const blockout of personBlockouts) {
-                const blockoutId = normalizeText(blockout.id);
-                if (!blockoutId) {
-                    continue;
-                }
-
-                // First try the blockout's own dates (starts_at / ends_at on the resource).
-                // This covers simple non-recurring blockouts and is the most reliable source.
-                const directRange = blockoutRange(blockout, null);
-                if (directRange) {
-                    ranges.push(directRange);
-                    continue;
-                }
-
-                // Blockout has no usable direct dates (e.g. recurring-only entries).
-                // Fall back to individual blockout_dates occurrences.
-                let blockoutDates = [];
-                try {
-                    // eslint-disable-next-line no-await-in-loop
-                    blockoutDates = await paginateWithFallback([
-                        `/people/${person.id}/blockouts/${blockoutId}/blockout_dates?per_page=100`,
-                        `https://api.planningcenteronline.com/people/v2/people/${person.id}/blockouts/${blockoutId}/blockout_dates?per_page=100`,
-                    ]);
-                } catch (_error) {
-                    blockoutDates = [];
-                }
-
-                for (const blockoutDate of blockoutDates) {
-                    const range = blockoutRange(blockout, blockoutDate);
-                    if (range) {
-                        ranges.push(range);
-                    }
-                }
-            }
-
-            blockoutRangesByPerson.set(person.id, ranges);
-        }
 
         const scheduledWeeksByPerson = new Map();
         const scheduledAssignments = [];
@@ -373,6 +379,15 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
             scheduledWeeksByPerson,
             scheduledAssignments,
         };
+    }
+
+    async function loadTeamBlockoutBundle(teamId) {
+        const safeTeamId = normalizeText(teamId);
+        if (!safeTeamId) {
+            throw new Error("A Planning Center team id is required.");
+        }
+
+        return loadTeamPeopleAndBlockoutRanges(safeTeamId, paginateWithFallback);
     }
 
     async function listTeamMembers(teamId) {
@@ -449,7 +464,6 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
             const teams = [];
 
             for (const serviceType of serviceTypes) {
-                // eslint-disable-next-line no-await-in-loop
                 const scopedTeams = await paginateWithFallback([
                     `/service_types/${serviceType.id}/teams?per_page=100&order=name`,
                 ]);
@@ -490,6 +504,7 @@ function makePlanningCenterClient({ appId, secret, authToken }) {
         listTeams,
         listServiceTypes,
         listTeamMembers,
+        loadTeamBlockoutBundle,
         loadTeamBundle,
     };
 }

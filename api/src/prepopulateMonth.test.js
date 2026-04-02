@@ -100,4 +100,24 @@ describe('prePopulateMonth', () => {
             }
         });
     });
+
+    it('preserves seeded assignments and their existing work counts', async () => {
+        const assignments = await prePopulateMonth(3, 2026, {
+            initialAssignments: {
+                '2026-03-08': { 101: 2 },
+            },
+            initialWorkCounts: {
+                2: 1,
+            },
+        });
+
+        expect(assignments['2026-03-08'][101]).toBe(2);
+
+        const leadCounts = { 1: 0, 2: 0, 3: 0 };
+        Object.values(assignments).forEach(day => {
+            if (day[101]) leadCounts[day[101]]++;
+        });
+
+        expect(leadCounts[2]).toBeLessThanOrEqual(2);
+    });
 });
