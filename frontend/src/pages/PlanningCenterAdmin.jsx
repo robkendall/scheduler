@@ -19,23 +19,20 @@ import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 
 import {
+    createRole,
+    deleteRole,
     getPlanningCenterHealth,
     getPlanningCenterTeamMembers,
     getPlanningCenterServiceTypes,
     getPlanningCenterTeams,
     getRoles,
     importPlanningCenterRole,
-    syncPlanningCenterRoleBlockouts,
     updateRole,
 } from "../api/scheduler";
 import PageShell from "../components/PageShell";
 
 function formatImportSummary(roleName, result) {
     return `${roleName}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`;
-}
-
-function formatBlockoutSyncSummary(roleName, result) {
-    return `${roleName}: future blockouts synced for ${result.sync.peopleSeen} people, ${result.sync.futureRemoteRanges} remote ranges seen, ${result.sync.inserted} inserted, ${result.sync.updated} updated, ${result.sync.deleted} deleted, ${result.sync.matchedLegacy} matched legacy rows`;
 }
 
 function PlanningCenterAdmin() {
@@ -51,6 +48,8 @@ function PlanningCenterAdmin() {
     const [teamMembersOpen, setTeamMembersOpen] = useState(false);
     const [selectedTeam, setSelectedTeam] = useState(null);
     const [selectedTeamMembers, setSelectedTeamMembers] = useState([]);
+    const [newRoleName, setNewRoleName] = useState("");
+    const [rolePendingDelete, setRolePendingDelete] = useState(null);
 
     async function loadRoles() {
         const roleData = await getRoles();
@@ -167,6 +166,47 @@ function PlanningCenterAdmin() {
         }
     }
 
+    async function handleCreateRole(event) {
+        event.preventDefault();
+        const roleName = String(newRoleName || "").trim();
+        if (!roleName) {
+            setError("Role name is required.");
+            return;
+        }
+
+        setBusyKey("create-role");
+        setError("");
+
+        try {
+            await createRole({ name: roleName });
+            setNewRoleName("");
+            await loadRoles();
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBusyKey("");
+        }
+    }
+
+    async function confirmDeleteRole() {
+        if (!rolePendingDelete) {
+            return;
+        }
+
+        setBusyKey(`delete-role-${rolePendingDelete.id}`);
+        setError("");
+
+        try {
+            await deleteRole(rolePendingDelete.id);
+            await loadRoles();
+            setRolePendingDelete(null);
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBusyKey("");
+        }
+    }
+
     async function importRole(role) {
         setBusyKey(`import-${role.id}`);
         setError("");
@@ -175,23 +215,6 @@ function PlanningCenterAdmin() {
             const result = await importPlanningCenterRole(role.id);
             setImportSummary((prev) => [
                 formatImportSummary(role.name, result),
-                ...prev,
-            ].slice(0, 12));
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setBusyKey("");
-        }
-    }
-
-    async function syncRoleBlockouts(role) {
-        setBusyKey(`sync-blockouts-${role.id}`);
-        setError("");
-
-        try {
-            const result = await syncPlanningCenterRoleBlockouts(role.id);
-            setImportSummary((prev) => [
-                formatBlockoutSyncSummary(role.name, result),
                 ...prev,
             ].slice(0, 12));
         } catch (requestError) {
@@ -230,6 +253,23 @@ function PlanningCenterAdmin() {
         >
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
             {loading ? <Typography sx={{ mb: 2 }}>Loading admin tools...</Typography> : null}
+
+            <Box className="hero-card form-stack" sx={{ mb: 2 }}>
+                <Typography variant="h5">Role management</Typography>
+                <Box component="form" onSubmit={handleCreateRole}>
+                    <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
+                        <TextField
+                            label="New role name"
+                            value={newRoleName}
+                            onChange={(event) => setNewRoleName(event.target.value)}
+                            required
+                        />
+                        <Button type="submit" variant="contained" disabled={Boolean(busyKey)}>
+                            {busyKey === "create-role" ? "Creating..." : "Create role"}
+                        </Button>
+                    </Stack>
+                </Box>
+            </Box>
 
             <Box className="hero-card form-stack" sx={{ mb: 2 }}>
                 <Typography variant="h5">API Requests</Typography>
@@ -344,11 +384,11 @@ function PlanningCenterAdmin() {
                                         </Button>
                                         <Button
                                             size="small"
-                                            variant="outlined"
-                                            onClick={() => syncRoleBlockouts(role)}
+                                            color="error"
+                                            onClick={() => setRolePendingDelete(role)}
                                             disabled={Boolean(busyKey)}
                                         >
-                                            {busyKey === `sync-blockouts-${role.id}` ? "Syncing..." : "Sync future blockouts"}
+                                            {busyKey === `delete-role-${role.id}` ? "Deleting..." : "Delete role"}
                                         </Button>
                                         <Button
                                             size="small"
@@ -424,6 +464,42 @@ function PlanningCenterAdmin() {
                 </DialogContent>
                 <DialogActions>
                     <Button onClick={() => setTeamMembersOpen(false)}>Close</Button>
+                </DialogActions>
+            </Dialog>
+
+            <Dialog
+                open={Boolean(rolePendingDelete)}
+                onClose={() => {
+                    if (!busyKey.startsWith("delete-role-")) {
+                        setRolePendingDelete(null);
+                    }
+                }}
+                fullWidth
+                maxWidth="xs"
+            >
+                <DialogTitle>Delete role?</DialogTitle>
+                <DialogContent dividers>
+                    <Typography>
+                        {rolePendingDelete
+                            ? `Delete the role "${rolePendingDelete.name}"? This action cannot be undone.`
+                            : "Delete this role?"}
+                    </Typography>
+                </DialogContent>
+                <DialogActions>
+                    <Button
+                        onClick={() => setRolePendingDelete(null)}
+                        disabled={busyKey.startsWith("delete-role-")}
+                    >
+                        Cancel
+                    </Button>
+                    <Button
+                        color="error"
+                        variant="contained"
+                        onClick={confirmDeleteRole}
+                        disabled={busyKey.startsWith("delete-role-")}
+                    >
+                        {busyKey.startsWith("delete-role-") ? "Deleting..." : "Delete role"}
+                    </Button>
                 </DialogActions>
             </Dialog>
         </PageShell>

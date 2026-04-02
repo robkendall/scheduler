@@ -133,9 +133,7 @@ function AppRoutes({ activeRoleId, authLoading, onLoggedOut, onRoleChange, onUse
                 path="/roles"
                 element={
                     <RequireAuth authLoading={authLoading} user={user}>
-                        <RequireAdmin user={user}>
-                            <Roles />
-                        </RequireAdmin>
+                        <Roles user={user} />
                     </RequireAuth>
                 }
             />

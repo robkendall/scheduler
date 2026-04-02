@@ -42,7 +42,7 @@ function Navigation({ user }) {
         { icon: <CalendarMonthRoundedIcon />, label: "Calendar", to: "/calendar" },
         { icon: <GroupRoundedIcon />, label: "People", to: "/people" },
         { icon: <ViewInArRoundedIcon />, label: "Positions", to: "/positions" },
-        ...(user?.isAdmin ? [{ icon: <SecurityRoundedIcon />, label: "Roles", to: "/roles" }] : []),
+        { icon: <SecurityRoundedIcon />, label: "Roles", to: "/roles" },
         ...(user?.isAdmin ? [{ icon: <SyncAltRoundedIcon />, label: "Admin", to: "/admin" }] : []),
         ...(user?.isAdmin ? [{ icon: <AdminPanelSettingsRoundedIcon />, label: "Auth Users", to: "/users" }] : []),
     ];

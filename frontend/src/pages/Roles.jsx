@@ -9,20 +9,22 @@ import TableCell from "@mui/material/TableCell";
 import TableContainer from "@mui/material/TableContainer";
 import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
-import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
 
-import { createRole, deleteRole, getRoles, updateRole } from "../api/scheduler";
+import { getRoles, syncPlanningCenterRoleBlockouts } from "../api/scheduler";
 import PageShell from "../components/PageShell";
 import { formatDisplayDate } from "../utils/date";
 
-function Roles() {
+function formatBlockoutSyncSummary(roleName, result) {
+    return `${roleName}: future blockouts synced for ${result.sync.peopleSeen} people, ${result.sync.futureRemoteRanges} remote ranges seen, ${result.sync.inserted} inserted, ${result.sync.updated} updated, ${result.sync.deleted} deleted, ${result.sync.matchedLegacy} matched legacy rows`;
+}
+
+function Roles({ user }) {
     const [roles, setRoles] = useState([]);
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
-    const [saving, setSaving] = useState(false);
-    const [editingId, setEditingId] = useState(null);
-    const [name, setName] = useState("");
+    const [busyKey, setBusyKey] = useState("");
+    const [actionSummary, setActionSummary] = useState([]);
 
     async function loadRoles() {
         setLoading(true);
@@ -47,82 +49,41 @@ function Roles() {
         [roles],
     );
 
-    function beginEdit(role) {
-        setEditingId(role.id);
-        setName(role.name);
-    }
-
-    function clearForm() {
-        setEditingId(null);
-        setName("");
-    }
-
-    async function handleSubmit(event) {
-        event.preventDefault();
-        setSaving(true);
+    async function handleSyncRoleBlockouts(role) {
+        setBusyKey(`sync-blockouts-${role.id}`);
         setError("");
 
         try {
-            if (editingId) {
-                await updateRole(editingId, { name });
-            } else {
-                await createRole({ name });
-            }
-
-            clearForm();
-            await loadRoles();
+            const result = await syncPlanningCenterRoleBlockouts(role.id);
+            setActionSummary((prev) => [
+                formatBlockoutSyncSummary(role.name, result),
+                ...prev,
+            ].slice(0, 12));
         } catch (requestError) {
             setError(requestError.message);
         } finally {
-            setSaving(false);
-        }
-    }
-
-    async function handleDelete(id) {
-        setError("");
-
-        try {
-            await deleteRole(id);
-            if (editingId === id) {
-                clearForm();
-            }
-            await loadRoles();
-        } catch (requestError) {
-            setError(requestError.message);
+            setBusyKey("");
         }
     }
 
     return (
         <PageShell
-            eyebrow="Admin"
+            eyebrow="Workspace"
             title="Roles"
-            description="Create and maintain isolated scheduler roles. Each role has its own calendar, people, and positions."
+            description="View the roles you can access and import future Planning Center blockout dates for mapped roles."
         >
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
 
-            <Box component="form" className="hero-card form-stack" onSubmit={handleSubmit} sx={{ mb: 2 }}>
-                <Typography variant="h5">{editingId ? `Edit role #${editingId}` : "Create role"}</Typography>
-                <TextField
-                    label="Role name"
-                    value={name}
-                    onChange={(event) => setName(event.target.value)}
-                    required
-                />
-                <Stack direction="row" spacing={1}>
-                    <Button type="submit" variant="contained" disabled={saving}>
-                        {saving ? "Saving..." : editingId ? "Save role" : "Create role"}
-                    </Button>
-                    {editingId ? (
-                        <Button type="button" variant="outlined" onClick={clearForm}>
-                            Cancel
-                        </Button>
-                    ) : null}
-                </Stack>
+            <Box className="hero-card form-stack" sx={{ mb: 2 }}>
+                <Typography variant="h5">Accessible roles</Typography>
+                <Typography color="text.secondary">
+                    You can view roles you have access to here. Future blockout import is available on roles mapped to Planning Center.
+                </Typography>
             </Box>
 
             {loading ? <Typography>Loading roles...</Typography> : null}
 
-            <TableContainer className="hero-card" sx={{ overflowX: "auto" }}>
+            <TableContainer className="hero-card" sx={{ mb: 2, overflowX: "auto" }}>
                 <Table size="small" aria-label="roles table">
                     <TableHead>
                         <TableRow>
@@ -133,24 +94,37 @@ function Roles() {
                     </TableHead>
                     <TableBody>
                         {sortedRoles.map((role) => (
-                            <TableRow key={role.id} hover selected={editingId === role.id}>
+                            <TableRow key={role.id} hover>
                                 <TableCell>{role.name}</TableCell>
                                 <TableCell>{formatDisplayDate(role.created_at)}</TableCell>
                                 <TableCell align="right">
-                                    <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                        <Button size="small" variant="outlined" onClick={() => beginEdit(role)}>
-                                            Edit
-                                        </Button>
-                                        <Button size="small" color="error" onClick={() => handleDelete(role.id)}>
-                                            Delete
-                                        </Button>
-                                    </Stack>
+                                    <Button
+                                        size="small"
+                                        variant="outlined"
+                                        onClick={() => handleSyncRoleBlockouts(role)}
+                                        disabled={Boolean(busyKey) || !(role.external_source === "planning_center" && role.external_role_kind === "services_team" && role.external_role_id)}
+                                    >
+                                        {busyKey === `sync-blockouts-${role.id}` ? "Importing..." : "Import future blockouts"}
+                                    </Button>
                                 </TableCell>
                             </TableRow>
                         ))}
                     </TableBody>
                 </Table>
             </TableContainer>
+
+            <Box className="hero-card form-stack">
+                <Typography variant="h5">Recent role actions</Typography>
+                {actionSummary.length === 0 ? (
+                    <Typography color="text.secondary">No role actions run yet.</Typography>
+                ) : (
+                    <Stack spacing={0.5}>
+                        {actionSummary.map((line) => (
+                            <Typography key={line} variant="body2">{line}</Typography>
+                        ))}
+                    </Stack>
+                )}
+            </Box>
         </PageShell>
     );
 }

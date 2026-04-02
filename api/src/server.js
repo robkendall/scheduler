@@ -246,6 +246,27 @@ async function resolveRoleId(req, res) {
   }
 }
 
+async function ensureRoleAccess(roleId, req, res) {
+  if (req.session.userIsAdmin) {
+    return true;
+  }
+
+  try {
+    const access = await pool.query(
+      "SELECT 1 FROM user_roles WHERE user_id = $1 AND role_id = $2",
+      [req.session.userId, roleId],
+    );
+    if (access.rows.length === 0) {
+      res.status(403).json({ error: "Access denied to this role." });
+      return false;
+    }
+    return true;
+  } catch (error) {
+    handleServerError(res, "Role access check failed", error);
+    return false;
+  }
+}
+
 async function hasRoleScopedRecord(query, params) {
   const result = await pool.query(query, params);
   return result.rows.length > 0;
@@ -842,13 +863,22 @@ app.get("/api/planning-center/teams/:teamId/members", requireAdmin, async (req, 
 
 // --- Roles ---
 
-app.get("/api/roles", requireAdmin, async (_req, res) => {
+app.get("/api/roles", requireAuth, async (req, res) => {
   try {
-    const result = await pool.query(
-      `SELECT id, name, created_at, external_source, external_role_kind, external_role_id
-       FROM roles
-       ORDER BY name ASC`,
-    );
+    const result = req.session.userIsAdmin
+      ? await pool.query(
+        `SELECT id, name, created_at, external_source, external_role_kind, external_role_id
+         FROM roles
+         ORDER BY name ASC`,
+      )
+      : await pool.query(
+        `SELECT r.id, r.name, r.created_at, r.external_source, r.external_role_kind, r.external_role_id
+         FROM roles r
+         JOIN user_roles ur ON ur.role_id = r.id
+         WHERE ur.user_id = $1
+         ORDER BY r.name ASC`,
+        [req.session.userId],
+      );
     return res.json(result.rows);
   } catch (error) {
     return handleServerError(res, "Failed to load roles", error);
@@ -1245,10 +1275,14 @@ app.post("/api/roles/:id/import-planning-center", requireAdmin, async (req, res)
   }
 });
 
-app.post("/api/roles/:id/sync-planning-center-blockouts", requireAdmin, async (req, res) => {
+app.post("/api/roles/:id/sync-planning-center-blockouts", requireAuth, async (req, res) => {
   const roleId = parsePositiveInt(req.params.id);
   if (!roleId) {
     return res.status(400).json({ error: "Valid role ID is required." });
+  }
+
+  if (!(await ensureRoleAccess(roleId, req, res))) {
+    return;
   }
 
   let role;
