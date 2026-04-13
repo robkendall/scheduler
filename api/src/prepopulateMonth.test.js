@@ -120,4 +120,139 @@ describe('prePopulateMonth', () => {
 
         expect(leadCounts[2]).toBeLessThanOrEqual(2);
     });
+
+    it('considers candidates above Everyone Else before scarcity', async () => {
+        const assignments = await prePopulateMonth(1, 2026, {
+            sundays: ['2026-01-04', '2026-01-11'],
+            peoplePool: [
+                {
+                    id: 1,
+                    name: 'Above One',
+                    normal_weeks: [1, 2],
+                    max_weeks: 2,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+                {
+                    id: 2,
+                    name: 'Above Two',
+                    normal_weeks: [1, 2],
+                    max_weeks: 2,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+                {
+                    id: 3,
+                    name: 'Below EE',
+                    normal_weeks: [1],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+            ],
+            rankedPositions: [
+                {
+                    id: 101,
+                    name: 'Lead',
+                    rank: 1,
+                    is_required: true,
+                    can_be_doubled_up: false,
+                    priority_list: [2, 1, 3],
+                    everyone_else_index: 2,
+                },
+            ],
+            warn: () => { },
+        });
+
+        expect(assignments['2026-01-04'][101]).toBe(2);
+    });
+
+    it('treats people below Everyone Else as last ditch effort', async () => {
+        const assignments = await prePopulateMonth(1, 2026, {
+            sundays: ['2026-01-04'],
+            peoplePool: [
+                {
+                    id: 1,
+                    name: 'Above But Unavailable',
+                    normal_weeks: [2],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+                {
+                    id: 2,
+                    name: 'Below EE',
+                    normal_weeks: [1],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+                {
+                    id: 3,
+                    name: 'Everyone Else',
+                    normal_weeks: [1],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+            ],
+            rankedPositions: [
+                {
+                    id: 101,
+                    name: 'Lead',
+                    rank: 1,
+                    is_required: true,
+                    can_be_doubled_up: false,
+                    priority_list: [1, 2],
+                    everyone_else_index: 1,
+                },
+            ],
+            warn: () => { },
+        });
+
+        expect(assignments['2026-01-04'][101]).toBe(3);
+    });
+
+    it('emits trace events for candidate filtering and final selection', async () => {
+        const trace = [];
+
+        const assignments = await prePopulateMonth(1, 2026, {
+            sundays: ['2026-01-04'],
+            peoplePool: [
+                {
+                    id: 1,
+                    name: 'Lead One',
+                    normal_weeks: [1],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+                {
+                    id: 2,
+                    name: 'Lead Two',
+                    normal_weeks: [1],
+                    max_weeks: 1,
+                    qualified_positions: [101],
+                    block_outs: [],
+                },
+            ],
+            rankedPositions: [
+                {
+                    id: 101,
+                    name: 'Lead',
+                    rank: 1,
+                    is_required: true,
+                    can_be_doubled_up: false,
+                    priority_list: [2, 1],
+                },
+            ],
+            warn: () => { },
+            trace: (entry) => trace.push(entry),
+        });
+
+        expect(assignments['2026-01-04'][101]).toBe(2);
+        expect(trace.some((entry) => entry.event === 'standard-candidate-scan')).toBe(true);
+        expect(trace.some((entry) => entry.event === 'standard-selection')).toBe(true);
+        expect(trace.some((entry) => entry.event === 'standard-assigned')).toBe(true);
+    });
 });

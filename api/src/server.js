@@ -8,6 +8,7 @@ const pgSession = require("connect-pg-simple")(session);
 const pool = require("./db");
 const { makePlanningCenterClient } = require("./planningCenter");
 const { prePopulateMonth } = require("./prepopulateMonth");
+const { prePopulateMonthGroup } = require("./prepopulateMonthGroup");
 const requireAuth = require("./middleware/auth");
 
 const app = express();
@@ -125,6 +126,14 @@ function parsePositiveInt(value) {
   return parsed;
 }
 
+function parseNonNegativeInt(value) {
+  const parsed = Number(value);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return null;
+  }
+  return parsed;
+}
+
 function parseOptionalBoolean(value) {
   if (typeof value === "boolean") {
     return value;
@@ -139,6 +148,52 @@ function parseOptionalBoolean(value) {
   }
 
   return null;
+}
+
+function parseApplyStrategy(value) {
+  const normalized = normalizeOptionalText(value)?.toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized === "single_apply" || normalized === "group_apply") {
+    return normalized;
+  }
+  return null;
+}
+
+function parseRoleApplySettings(payload) {
+  const hasApplyStrategy = Object.prototype.hasOwnProperty.call(payload || {}, "applyStrategy");
+  const hasGlobalMinAssignments = Object.prototype.hasOwnProperty.call(payload || {}, "globalMinAssignments");
+  const hasGlobalMaxAssignments = Object.prototype.hasOwnProperty.call(payload || {}, "globalMaxAssignments");
+
+  const applyStrategy = hasApplyStrategy ? parseApplyStrategy(payload.applyStrategy) : null;
+  const globalMinAssignments = hasGlobalMinAssignments ? parseNonNegativeInt(payload.globalMinAssignments) : null;
+  const globalMaxAssignments = hasGlobalMaxAssignments ? parseNonNegativeInt(payload.globalMaxAssignments) : null;
+
+  if (hasApplyStrategy && !applyStrategy) {
+    throw new Error("applyStrategy must be Single Apply or Group Apply.");
+  }
+
+  if (hasGlobalMinAssignments && globalMinAssignments === null) {
+    throw new Error("globalMinAssignments must be a non-negative integer.");
+  }
+
+  if (hasGlobalMaxAssignments && globalMaxAssignments === null) {
+    throw new Error("globalMaxAssignments must be a non-negative integer.");
+  }
+
+  const effectiveMin = globalMinAssignments ?? 1;
+  const effectiveMax = globalMaxAssignments ?? effectiveMin;
+  if ((hasGlobalMinAssignments || hasGlobalMaxAssignments) && effectiveMax < effectiveMin) {
+    throw new Error("globalMaxAssignments must be greater than or equal to globalMinAssignments.");
+  }
+
+  return {
+    applyFieldsProvided: hasApplyStrategy || hasGlobalMinAssignments || hasGlobalMaxAssignments,
+    applyStrategy,
+    globalMinAssignments,
+    globalMaxAssignments,
+  };
 }
 
 function weekNumberFromSunday(dateValue) {
@@ -331,6 +386,33 @@ async function ensureAssignmentInRole(assignmentId, roleId, res) {
   return true;
 }
 
+async function getPositionCapacityForSchedule(client, scheduleId, positionId, roleId, excludedAssignmentId = null) {
+  const result = await client.query(
+    `SELECT pos.name,
+            pos.allows_multiple_assignments,
+            pos.max_assignments,
+            COUNT(ps.id) FILTER (WHERE $4::int IS NULL OR ps.id <> $4)::int AS assigned_count
+     FROM positions pos
+     JOIN schedule s ON s.id = $1 AND s.role_id = $3
+     LEFT JOIN people_schedule ps ON ps.schedule_id = s.id AND ps.position_id = pos.id
+     WHERE pos.id = $2 AND pos.role_id = $3 AND pos.soft_deleted = FALSE
+     GROUP BY pos.id, pos.name, pos.allows_multiple_assignments, pos.max_assignments`,
+    [scheduleId, positionId, roleId, excludedAssignmentId],
+  );
+
+  if (result.rows.length === 0) {
+    return null;
+  }
+
+  const row = result.rows[0];
+  return {
+    name: row.name,
+    allowsMultipleAssignments: !!row.allows_multiple_assignments,
+    maxAssignments: Number.isInteger(row.max_assignments) ? row.max_assignments : 1,
+    assignedCount: row.assigned_count,
+  };
+}
+
 app.get("/api/health", async (_req, res) => {
   const result = await pool.query("SELECT NOW() AS now");
   res.json({
@@ -366,9 +448,9 @@ app.get("/api/me", async (req, res) => {
 
   try {
     const rolesResult = user.is_admin
-      ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
+      ? await pool.query("SELECT id, name, apply_strategy, global_min_assignments, global_max_assignments FROM roles ORDER BY name ASC")
       : await pool.query(
-        `SELECT r.id, r.name
+        `SELECT r.id, r.name, r.apply_strategy, r.global_min_assignments, r.global_max_assignments
            FROM roles r
            JOIN user_roles ur ON ur.role_id = r.id
            WHERE ur.user_id = $1
@@ -418,9 +500,9 @@ app.post("/api/login", async (req, res) => {
     req.session.userIsAdmin = user.is_admin;
 
     const rolesResult = user.is_admin
-      ? await pool.query("SELECT id, name FROM roles ORDER BY name ASC")
+      ? await pool.query("SELECT id, name, apply_strategy, global_min_assignments, global_max_assignments FROM roles ORDER BY name ASC")
       : await pool.query(
-        `SELECT r.id, r.name
+        `SELECT r.id, r.name, r.apply_strategy, r.global_min_assignments, r.global_max_assignments
            FROM roles r
            JOIN user_roles ur ON ur.role_id = r.id
            WHERE ur.user_id = $1
@@ -867,12 +949,14 @@ app.get("/api/roles", requireAuth, async (req, res) => {
   try {
     const result = req.session.userIsAdmin
       ? await pool.query(
-        `SELECT id, name, created_at, external_source, external_role_kind, external_role_id
+        `SELECT id, name, created_at, external_source, external_role_kind, external_role_id,
+                apply_strategy, global_min_assignments, global_max_assignments
          FROM roles
          ORDER BY name ASC`,
       )
       : await pool.query(
-        `SELECT r.id, r.name, r.created_at, r.external_source, r.external_role_kind, r.external_role_id
+        `SELECT r.id, r.name, r.created_at, r.external_source, r.external_role_kind, r.external_role_id,
+                r.apply_strategy, r.global_min_assignments, r.global_max_assignments
          FROM roles r
          JOIN user_roles ur ON ur.role_id = r.id
          WHERE ur.user_id = $1
@@ -898,12 +982,36 @@ app.post("/api/roles", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: error.message });
   }
 
+  let applySettings;
+  try {
+    applySettings = parseRoleApplySettings(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
   try {
     const result = await pool.query(
-      `INSERT INTO roles (name, external_source, external_role_kind, external_role_id)
-       VALUES ($1, $2, $3, $4)
-       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id`,
-      [name, mapping.externalSource, mapping.externalRoleKind, mapping.externalRoleId],
+      `INSERT INTO roles (
+         name,
+         external_source,
+         external_role_kind,
+         external_role_id,
+         apply_strategy,
+         global_min_assignments,
+         global_max_assignments
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id,
+                 apply_strategy, global_min_assignments, global_max_assignments`,
+      [
+        name,
+        mapping.externalSource,
+        mapping.externalRoleKind,
+        mapping.externalRoleId,
+        applySettings.applyStrategy || "single_apply",
+        applySettings.globalMinAssignments ?? 1,
+        applySettings.globalMaxAssignments ?? Math.max(applySettings.globalMinAssignments ?? 1, 1),
+      ],
     );
     return res.status(201).json(result.rows[0]);
   } catch (error) {
@@ -928,21 +1036,35 @@ app.put("/api/roles/:id", requireAdmin, async (req, res) => {
     return res.status(400).json({ error: error.message });
   }
 
+  let applySettings;
+  try {
+    applySettings = parseRoleApplySettings(req.body);
+  } catch (error) {
+    return res.status(400).json({ error: error.message });
+  }
+
   try {
     const result = await pool.query(
       `UPDATE roles
        SET name = $1,
            external_source = CASE WHEN $2 THEN $3 ELSE external_source END,
            external_role_kind = CASE WHEN $2 THEN $4 ELSE external_role_kind END,
-           external_role_id = CASE WHEN $2 THEN $5 ELSE external_role_id END
-       WHERE id = $6
-       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id`,
+           external_role_id = CASE WHEN $2 THEN $5 ELSE external_role_id END,
+           apply_strategy = COALESCE($6, apply_strategy),
+           global_min_assignments = COALESCE($7, global_min_assignments),
+           global_max_assignments = COALESCE($8, global_max_assignments)
+       WHERE id = $9
+       RETURNING id, name, created_at, external_source, external_role_kind, external_role_id,
+                 apply_strategy, global_min_assignments, global_max_assignments`,
       [
         name,
         mapping.externalFieldsProvided,
         mapping.externalSource,
         mapping.externalRoleKind,
         mapping.externalRoleId,
+        applySettings.applyStrategy,
+        applySettings.globalMinAssignments,
+        applySettings.globalMaxAssignments,
         id,
       ],
     );
@@ -1895,7 +2017,9 @@ app.get("/api/positions", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, required, priority, can_double_up, created_at, updated_at
+      `SELECT id, name, required, priority, can_double_up,
+              allows_multiple_assignments, min_assignments, max_assignments,
+              created_at, updated_at
        FROM positions
        WHERE role_id = $1 AND soft_deleted = FALSE
        ORDER BY priority ASC, name ASC`,
@@ -1919,7 +2043,9 @@ app.get("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
 
   try {
     const result = await pool.query(
-      `SELECT id, name, required, priority, can_double_up, created_at, updated_at
+      `SELECT id, name, required, priority, can_double_up,
+              allows_multiple_assignments, min_assignments, max_assignments,
+              created_at, updated_at
        FROM positions
        WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE`,
       [id, roleId],
@@ -1939,9 +2065,33 @@ app.post("/api/positions", requireAuth, async (req, res) => {
   const name = normalizeText(req.body.name);
   const required = parseOptionalBoolean(req.body.required);
   const canDoubleUp = parseOptionalBoolean(req.body.canDoubleUp);
+  const allowsMultipleAssignments = parseOptionalBoolean(req.body.allowsMultipleAssignments);
+  const minAssignments = req.body.minAssignments === undefined ? null : parseNonNegativeInt(req.body.minAssignments);
+  const maxAssignments = req.body.maxAssignments === undefined ? null : parseNonNegativeInt(req.body.maxAssignments);
 
   if (!name) {
     return res.status(400).json({ error: "Name is required." });
+  }
+
+  if (req.body.minAssignments !== undefined && minAssignments === null) {
+    return res.status(400).json({ error: "minAssignments must be a non-negative integer." });
+  }
+
+  if (req.body.maxAssignments !== undefined && maxAssignments === null) {
+    return res.status(400).json({ error: "maxAssignments must be a non-negative integer." });
+  }
+
+  const effectiveRequired = required === null ? true : required;
+  const effectiveAllowsMultiple = allowsMultipleAssignments === null ? false : allowsMultipleAssignments;
+  const effectiveMinAssignments = minAssignments ?? (effectiveRequired ? 1 : 0);
+  const effectiveMaxAssignments = maxAssignments ?? (effectiveAllowsMultiple ? Math.max(effectiveMinAssignments, 2) : 1);
+
+  if (effectiveMaxAssignments < effectiveMinAssignments) {
+    return res.status(400).json({ error: "maxAssignments must be greater than or equal to minAssignments." });
+  }
+
+  if (!effectiveAllowsMultiple && effectiveMaxAssignments > 1) {
+    return res.status(400).json({ error: "Enable multiple assignments to allow more than one person on a position." });
   }
 
   const roleId = await resolveRoleId(req, res);
@@ -1955,10 +2105,21 @@ app.post("/api/positions", requireAuth, async (req, res) => {
     const nextPriority = priorityResult.rows[0].next_priority;
 
     const result = await pool.query(
-      `INSERT INTO positions (name, required, priority, can_double_up, role_id)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, name, required, priority, can_double_up, created_at, updated_at`,
-      [name, required === null ? true : required, nextPriority, canDoubleUp === null ? false : canDoubleUp, roleId],
+      `INSERT INTO positions (
+         name,
+         required,
+         priority,
+         can_double_up,
+         role_id,
+         allows_multiple_assignments,
+         min_assignments,
+         max_assignments
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING id, name, required, priority, can_double_up,
+                 allows_multiple_assignments, min_assignments, max_assignments,
+                 created_at, updated_at`,
+      [name, effectiveRequired, nextPriority, canDoubleUp === null ? false : canDoubleUp, roleId, effectiveAllowsMultiple, effectiveMinAssignments, effectiveMaxAssignments],
     );
 
     return res.status(201).json(result.rows[0]);
@@ -1977,6 +2138,9 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
   const priority = parsePositiveInt(req.body.priority);
   const required = parseOptionalBoolean(req.body.required);
   const canDoubleUp = parseOptionalBoolean(req.body.canDoubleUp);
+  const allowsMultipleAssignments = parseOptionalBoolean(req.body.allowsMultipleAssignments);
+  const minAssignments = req.body.minAssignments === undefined ? null : parseNonNegativeInt(req.body.minAssignments);
+  const maxAssignments = req.body.maxAssignments === undefined ? null : parseNonNegativeInt(req.body.maxAssignments);
 
   if (!id) {
     return res.status(400).json({ error: "Valid ID is required." });
@@ -1986,7 +2150,15 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
     return res.status(400).json({ error: "Name cannot be blank." });
   }
 
-  if (name === null && !priority && required === null && canDoubleUp === null) {
+  if (req.body.minAssignments !== undefined && minAssignments === null) {
+    return res.status(400).json({ error: "minAssignments must be a non-negative integer." });
+  }
+
+  if (req.body.maxAssignments !== undefined && maxAssignments === null) {
+    return res.status(400).json({ error: "maxAssignments must be a non-negative integer." });
+  }
+
+  if (name === null && !priority && required === null && canDoubleUp === null && allowsMultipleAssignments === null && minAssignments === null && maxAssignments === null) {
     return res.status(400).json({ error: "At least one field to update is required." });
   }
 
@@ -1994,16 +2166,46 @@ app.put("/api/positions/:id(\\d+)", requireAuth, async (req, res) => {
   if (!roleId) return;
 
   try {
+    const currentResult = await pool.query(
+      `SELECT required, allows_multiple_assignments, min_assignments, max_assignments
+       FROM positions
+       WHERE id = $1 AND role_id = $2 AND soft_deleted = FALSE`,
+      [id, roleId],
+    );
+
+    if (currentResult.rows.length === 0) {
+      return res.status(404).json({ error: "Position not found." });
+    }
+
+    const current = currentResult.rows[0];
+    const nextRequired = required === null ? current.required : required;
+    const nextAllowsMultiple = allowsMultipleAssignments === null ? current.allows_multiple_assignments : allowsMultipleAssignments;
+    const nextMinAssignments = minAssignments === null ? current.min_assignments : minAssignments;
+    const nextMaxAssignments = maxAssignments === null ? current.max_assignments : maxAssignments;
+
+    if (nextMaxAssignments < nextMinAssignments) {
+      return res.status(400).json({ error: "maxAssignments must be greater than or equal to minAssignments." });
+    }
+
+    if (!nextAllowsMultiple && nextMaxAssignments > 1) {
+      return res.status(400).json({ error: "Enable multiple assignments to allow more than one person on a position." });
+    }
+
     const result = await pool.query(
       `UPDATE positions
        SET name = COALESCE($1, name),
            priority = COALESCE($2, priority),
            required = COALESCE($3, required),
            can_double_up = COALESCE($4, can_double_up),
+           allows_multiple_assignments = COALESCE($5, allows_multiple_assignments),
+           min_assignments = COALESCE($6, min_assignments),
+           max_assignments = COALESCE($7, max_assignments),
            updated_at = NOW()
-       WHERE id = $5 AND role_id = $6 AND soft_deleted = FALSE
-       RETURNING id, name, required, priority, can_double_up, created_at, updated_at`,
-      [name, priority, required, canDoubleUp, id, roleId],
+       WHERE id = $8 AND role_id = $9 AND soft_deleted = FALSE
+       RETURNING id, name, required, priority, can_double_up,
+                 allows_multiple_assignments, min_assignments, max_assignments,
+                 created_at, updated_at`,
+      [name, priority, required, canDoubleUp, allowsMultipleAssignments, minAssignments, maxAssignments, id, roleId],
     );
 
     if (result.rows.length === 0) {
@@ -2063,7 +2265,12 @@ app.put("/api/positions/reorder", requireAuth, async (req, res) => {
     await client.query("COMMIT");
 
     const updated = await pool.query(
-      "SELECT id, name, required, priority, created_at, updated_at FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC",
+      `SELECT id, name, required, priority, can_double_up,
+              allows_multiple_assignments, min_assignments, max_assignments,
+              created_at, updated_at
+       FROM positions
+       WHERE role_id = $1 AND soft_deleted = FALSE
+       ORDER BY priority ASC, id ASC`,
       [roleId],
     );
     return res.json(updated.rows);
@@ -2496,7 +2703,7 @@ app.get("/api/schedule", requireAuth, async (req, res) => {
                     'positionName', pos.name,
                     'priority', pos.priority
                   )
-                  ORDER BY pos.name ASC
+                  ORDER BY pos.priority ASC, pos.name ASC, ps.id ASC
                 ) FILTER (WHERE ps.id IS NOT NULL),
                 '[]'::json
               ) AS assignments
@@ -2783,6 +2990,19 @@ app.post("/api/people-schedule", requireAuth, async (req, res) => {
   }
 
   try {
+    const capacity = await getPositionCapacityForSchedule(pool, scheduleId, positionId, roleId);
+    if (!capacity) {
+      return res.status(404).json({ error: "Position not found." });
+    }
+
+    if (capacity.assignedCount >= Math.max(1, capacity.maxAssignments)) {
+      return res.status(409).json({
+        error: capacity.allowsMultipleAssignments
+          ? "Position is already full for this schedule."
+          : "Position is already assigned for this schedule.",
+      });
+    }
+
     const result = await pool.query(
       `INSERT INTO people_schedule (schedule_id, person_id, position_id)
        VALUES ($1, $2, $3)
@@ -2834,6 +3054,19 @@ app.put("/api/people-schedule/:id", requireAuth, async (req, res) => {
   }
 
   try {
+    const capacity = await getPositionCapacityForSchedule(pool, scheduleId, positionId, roleId, id);
+    if (!capacity) {
+      return res.status(404).json({ error: "Position not found." });
+    }
+
+    if (capacity.assignedCount >= Math.max(1, capacity.maxAssignments)) {
+      return res.status(409).json({
+        error: capacity.allowsMultipleAssignments
+          ? "Position is already full for this schedule."
+          : "Position is already assigned for this schedule.",
+      });
+    }
+
     const result = await pool.query(
       `UPDATE people_schedule
        SET schedule_id = $1,
@@ -2910,9 +3143,31 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
   try {
     await client.query("BEGIN");
 
+    const roleResult = await client.query(
+      `SELECT apply_strategy, global_min_assignments, global_max_assignments
+       FROM roles
+       WHERE id = $1`,
+      [roleId],
+    );
+
+    if (roleResult.rows.length === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Role not found." });
+    }
+
+    const roleSettings = roleResult.rows[0];
+    const applyStrategy = roleSettings.apply_strategy || "single_apply";
+
     const [peopleResult, positionsResult, normalWeeksResult, blockedResult, personPositionsResult, positionPeopleOrderResult] = await Promise.all([
       client.query("SELECT id, name, max_weeks_per_month FROM people WHERE include_in_auto_schedule = TRUE AND role_id = $1 ORDER BY id ASC", [roleId]),
-      client.query("SELECT id, name, required, priority, can_double_up FROM positions WHERE role_id = $1 AND soft_deleted = FALSE ORDER BY priority ASC, id ASC", [roleId]),
+      client.query(
+        `SELECT id, name, required, priority, can_double_up,
+                allows_multiple_assignments, min_assignments, max_assignments
+         FROM positions
+         WHERE role_id = $1 AND soft_deleted = FALSE
+         ORDER BY priority ASC, id ASC`,
+        [roleId],
+      ),
       client.query(
         `SELECT nw.person_id, nw.week_number
          FROM normal_weeks nw
@@ -3030,12 +3285,28 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
     const peopleById = new Map(people.map((person) => [person.id, person]));
     const initialAssignmentsByDate = {};
     const initialWorkCounts = {};
+    const initialAssignedWeeks = {};
 
     existingAssignmentsResult.rows.forEach((row) => {
-      if (!initialAssignmentsByDate[row.track_date]) {
-        initialAssignmentsByDate[row.track_date] = {};
+      if (!initialAssignedWeeks[row.person_id]) {
+        initialAssignedWeeks[row.person_id] = [];
       }
-      initialAssignmentsByDate[row.track_date][row.position_id] = row.person_id;
+      if (!initialAssignedWeeks[row.person_id].includes(row.track_date)) {
+        initialAssignedWeeks[row.person_id].push(row.track_date);
+      }
+
+      if (!initialAssignmentsByDate[row.track_date]) {
+        initialAssignmentsByDate[row.track_date] = applyStrategy === "group_apply" ? [] : {};
+      }
+
+      if (applyStrategy === "group_apply") {
+        initialAssignmentsByDate[row.track_date].push({
+          positionId: row.position_id,
+          personId: row.person_id,
+        });
+      } else {
+        initialAssignmentsByDate[row.track_date][row.position_id] = row.person_id;
+      }
 
       if (!canDoubleUpByPosition.get(row.position_id)) {
         initialWorkCounts[row.person_id] = (initialWorkCounts[row.person_id] || 0) + 1;
@@ -3045,10 +3316,12 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
         assignedBySchedule.set(row.schedule_id, {
           personIds: new Set(),
           positionIds: new Set(),
+          assignmentKeys: new Set(),
         });
       }
       assignedBySchedule.get(row.schedule_id).personIds.add(row.person_id);
       assignedBySchedule.get(row.schedule_id).positionIds.add(row.position_id);
+      assignedBySchedule.get(row.schedule_id).assignmentKeys.add(`${row.position_id}:${row.person_id}`);
     });
 
     const createdAssignments = [];
@@ -3065,42 +3338,77 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
       })),
     }));
 
-    const transformedPositions = positions.map((position) => ({
-      id: position.id,
-      name: position.name,
-      rank: position.priority,
-      is_required: position.required,
-      can_be_doubled_up: !!position.can_double_up,
-      priority_list: (personOrderByPosition.get(position.id) || [])
+    const transformedPositions = positions.map((position) => {
+      const positionOrder = personOrderByPosition.get(position.id) || [];
+      const everyoneElseRow = positionOrder.find((item) => item.person_id === null);
+      const priorityList = positionOrder
         .filter((item) => item.person_id !== null)
-        .map((item) => item.person_id),
-    }));
+        .map((item) => item.person_id);
 
-    const computedAssignments = await prePopulateMonth(bounds.monthZeroBased + 1, bounds.year, {
-      sundays: sundayDates,
-      peoplePool: transformedPeople,
-      rankedPositions: transformedPositions,
-      initialAssignments: initialAssignmentsByDate,
-      initialWorkCounts,
-      roleId,
-      warn: (message) => console.warn(message),
+      return {
+        id: position.id,
+        name: position.name,
+        rank: position.priority,
+        is_required: position.required,
+        can_be_doubled_up: !!position.can_double_up,
+        allows_multiple_assignments: !!position.allows_multiple_assignments,
+        min_assignments: position.min_assignments,
+        max_assignments: position.max_assignments,
+        priority_list: priorityList,
+        everyone_else_index: everyoneElseRow
+          ? positionOrder.filter((item) => item.person_id !== null && item.rank_order < everyoneElseRow.rank_order).length
+          : undefined,
+      };
     });
+
+    const computedAssignments = applyStrategy === "group_apply"
+      ? await prePopulateMonthGroup(bounds.monthZeroBased + 1, bounds.year, {
+        sundays: sundayDates,
+        peoplePool: transformedPeople,
+        rankedPositions: transformedPositions,
+        initialAssignments: initialAssignmentsByDate,
+        initialAssignedWeeks,
+        globalMinAssignments: roleSettings.global_min_assignments,
+        globalMaxAssignments: roleSettings.global_max_assignments,
+        roleId,
+        warn: (message) => console.warn(message),
+      })
+      : await prePopulateMonth(bounds.monthZeroBased + 1, bounds.year, {
+        sundays: sundayDates,
+        peoplePool: transformedPeople,
+        rankedPositions: transformedPositions,
+        initialAssignments: initialAssignmentsByDate,
+        initialWorkCounts,
+        roleId,
+        warn: (message) => console.warn(message),
+      });
 
     for (const date of sundayDates) {
       const schedule = scheduleByDate.get(date);
       const assigned = assignedBySchedule.get(schedule.id) || {
         personIds: new Set(),
         positionIds: new Set(),
+        assignmentKeys: new Set(),
       };
 
       if (!assignedBySchedule.has(schedule.id)) {
         assignedBySchedule.set(schedule.id, assigned);
       }
 
-      const dayAssignments = computedAssignments[date] || {};
-      for (const [positionIdText, personId] of Object.entries(dayAssignments)) {
-        const positionId = Number(positionIdText);
-        if (assigned.positionIds.has(positionId)) {
+      const rawDayAssignments = computedAssignments[date] || (applyStrategy === "group_apply" ? [] : {});
+      const dayAssignments = applyStrategy === "group_apply"
+        ? rawDayAssignments.map((entry) => ({ positionId: Number(entry.positionId), personId: Number(entry.personId) }))
+        : Object.entries(rawDayAssignments).map(([positionIdText, personId]) => ({
+          positionId: Number(positionIdText),
+          personId: Number(personId),
+        }));
+
+      for (const { positionId, personId } of dayAssignments) {
+        const assignmentKey = `${positionId}:${personId}`;
+        if (applyStrategy !== "group_apply" && assigned.positionIds.has(positionId)) {
+          continue;
+        }
+        if (assigned.assignmentKeys.has(assignmentKey)) {
           continue;
         }
 
@@ -3127,6 +3435,7 @@ app.post("/api/schedule/prepopulate", requireAuth, async (req, res) => {
 
         assigned.personIds.add(selectedPerson.id);
         assigned.positionIds.add(positionId);
+        assigned.assignmentKeys.add(assignmentKey);
 
         createdAssignments.push({
           ...insertAssignmentResult.rows[0],

@@ -21,7 +21,36 @@ async function prePopulateMonth(month, year, options = {}) {
     const workCounts = {};
     const initialWorkCounts = options.initialWorkCounts || {};
     const warn = options.warn || console.warn;
+    const trace = typeof options.trace === 'function' ? options.trace : null;
+    const peopleById = new Map(peoplePool.map((person) => [person.id, person]));
+    const positionsById = new Map(rankedPositions.map((position) => [position.id, position]));
     peoplePool.forEach(p => { workCounts[p.id] = initialWorkCounts[p.id] || 0; });
+
+    emitTrace(trace, 'setup', {
+        month,
+        year,
+        sundays,
+        people: peoplePool.map((person) => ({
+            id: person.id,
+            name: person.name,
+            normalWeeks: person.normal_weeks,
+            maxWeeks: person.max_weeks,
+            qualifiedPositions: person.qualified_positions,
+        })),
+        positions: rankedPositions.map((position) => ({
+            id: position.id,
+            name: position.name,
+            rank: position.rank,
+            isRequired: position.is_required,
+            canBeDoubledUp: position.can_be_doubled_up,
+            priorityList: position.priority_list || [],
+            everyoneElseIndex: getEveryoneElseIndex(position),
+        })),
+        initialAssignments: Object.fromEntries(
+            Object.entries(assignments).map(([date, dayAssignments]) => [date, summarizeAssignments(dayAssignments, peopleById, positionsById)])
+        ),
+        initialWorkCounts,
+    });
 
     // 2. PHASE 1: FILL STANDARD ROLES (Top-Down by Rank)
     for (const position of rankedPositions) {
@@ -29,25 +58,89 @@ async function prePopulateMonth(month, year, options = {}) {
         for (const sunday of sundays) {
             const weekNum = helpers.getWeekNumber(sunday);
             if (!assignments[sunday]) assignments[sunday] = {};
-            if (assignments[sunday][position.id]) continue;
-            // HARD FILTERS
-            let candidates = peoplePool.filter(p =>
-                p.normal_weeks.includes(weekNum) &&
-                !isBlockedOut(p, sunday) &&
-                workCounts[p.id] < p.max_weeks &&
-                isQualified(p, position) &&
-                !Object.values(assignments[sunday]).includes(p.id)
-            );
+            if (assignments[sunday][position.id]) {
+                emitTrace(trace, 'standard-skip-preassigned', {
+                    sunday,
+                    weekNum,
+                    positionId: position.id,
+                    positionName: position.name,
+                    currentAssignment: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+                });
+                continue;
+            }
+
+            const alreadyAssignedIds = Object.values(assignments[sunday]);
+            const candidateDetails = peoplePool.map((person) => {
+                const isNormalWeek = person.normal_weeks.includes(weekNum);
+                const blockedOut = isBlockedOut(person, sunday);
+                const underMax = workCounts[person.id] < person.max_weeks;
+                const qualified = isQualified(person, position);
+                const alreadyAssignedToday = alreadyAssignedIds.includes(person.id);
+                return {
+                    id: person.id,
+                    name: person.name,
+                    isNormalWeek,
+                    blockedOut,
+                    underMax,
+                    qualified,
+                    alreadyAssignedToday,
+                    currentWorkCount: workCounts[person.id],
+                    maxWeeks: person.max_weeks,
+                    tier: getEveryoneElseTier(person.id, position),
+                    passed: isNormalWeek && !blockedOut && underMax && qualified && !alreadyAssignedToday,
+                };
+            });
+            const candidates = candidateDetails
+                .filter((detail) => detail.passed)
+                .map((detail) => peopleById.get(detail.id));
+
+            emitTrace(trace, 'standard-candidate-scan', {
+                sunday,
+                weekNum,
+                positionId: position.id,
+                positionName: position.name,
+                currentAssignments: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+                candidateDetails,
+            });
+
             if (candidates.length === 0) {
                 if (position.is_required) {
                     warn(`Could not fill required position ${position.name} on ${sunday}`);
                 }
+                emitTrace(trace, 'standard-no-candidates', {
+                    sunday,
+                    weekNum,
+                    positionId: position.id,
+                    positionName: position.name,
+                    isRequired: position.is_required,
+                });
                 continue;
             }
-            // Scarcity logic
-            const bestPerson = rankByScarcity(candidates, position, sundays, workCounts, assignments);
-            assignments[sunday][position.id] = bestPerson.id;
-            workCounts[bestPerson.id]++;
+
+            const selection = selectByScarcity(candidates, position, sundays, workCounts, assignments);
+            emitTrace(trace, 'standard-selection', {
+                sunday,
+                weekNum,
+                positionId: position.id,
+                positionName: position.name,
+                chosenTier: selection.tierName,
+                scoredCandidates: selection.scoredCandidates,
+                selectedPersonId: selection.selected.id,
+                selectedPersonName: selection.selected.name,
+            });
+
+            assignments[sunday][position.id] = selection.selected.id;
+            workCounts[selection.selected.id]++;
+            emitTrace(trace, 'standard-assigned', {
+                sunday,
+                weekNum,
+                positionId: position.id,
+                positionName: position.name,
+                assignedPersonId: selection.selected.id,
+                assignedPersonName: selection.selected.name,
+                updatedWorkCount: workCounts[selection.selected.id],
+                dayAssignments: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+            });
         }
     }
 
@@ -56,19 +149,80 @@ async function prePopulateMonth(month, year, options = {}) {
         if (!position.can_be_doubled_up) continue;
         for (const sunday of sundays) {
             if (!assignments[sunday]) assignments[sunday] = {};
-            if (assignments[sunday][position.id]) continue;
+            if (assignments[sunday][position.id]) {
+                emitTrace(trace, 'double-up-skip-preassigned', {
+                    sunday,
+                    positionId: position.id,
+                    positionName: position.name,
+                    currentAssignment: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+                });
+                continue;
+            }
             const alreadyWorking = Object.values(assignments[sunday]);
-            const candidates = peoplePool.filter(p =>
-                alreadyWorking.includes(p.id) &&
-                isQualified(p, position)
-            );
-            if (candidates.length === 0) continue;
-            const bestPerson = rankByPriorityList(candidates, position);
-            if (bestPerson) {
-                assignments[sunday][position.id] = bestPerson.id;
+            const candidateDetails = peoplePool.map((person) => {
+                const alreadyWorkingToday = alreadyWorking.includes(person.id);
+                const qualified = isQualified(person, position);
+                return {
+                    id: person.id,
+                    name: person.name,
+                    alreadyWorkingToday,
+                    qualified,
+                    tier: getEveryoneElseTier(person.id, position),
+                    passed: alreadyWorkingToday && qualified,
+                };
+            });
+            const candidates = candidateDetails
+                .filter((detail) => detail.passed)
+                .map((detail) => peopleById.get(detail.id));
+
+            emitTrace(trace, 'double-up-candidate-scan', {
+                sunday,
+                positionId: position.id,
+                positionName: position.name,
+                currentAssignments: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+                candidateDetails,
+            });
+
+            if (candidates.length === 0) {
+                emitTrace(trace, 'double-up-no-candidates', {
+                    sunday,
+                    positionId: position.id,
+                    positionName: position.name,
+                });
+                continue;
+            }
+
+            const selection = selectByPriorityList(candidates, position);
+            emitTrace(trace, 'double-up-selection', {
+                sunday,
+                positionId: position.id,
+                positionName: position.name,
+                chosenTier: selection.tierName,
+                sortedCandidates: selection.sortedCandidates,
+                selectedPersonId: selection.selected.id,
+                selectedPersonName: selection.selected.name,
+            });
+            if (selection.selected) {
+                assignments[sunday][position.id] = selection.selected.id;
+                emitTrace(trace, 'double-up-assigned', {
+                    sunday,
+                    positionId: position.id,
+                    positionName: position.name,
+                    assignedPersonId: selection.selected.id,
+                    assignedPersonName: selection.selected.name,
+                    dayAssignments: summarizeAssignments(assignments[sunday], peopleById, positionsById),
+                });
             }
         }
     }
+
+    emitTrace(trace, 'complete', {
+        assignments: Object.fromEntries(
+            Object.entries(assignments).map(([date, dayAssignments]) => [date, summarizeAssignments(dayAssignments, peopleById, positionsById)])
+        ),
+        workCounts,
+    });
+
     return assignments;
 }
 
@@ -105,11 +259,86 @@ function isQualified(person, position) {
     return person.qualified_positions.includes(position.id);
 }
 
-function rankByScarcity(candidates, position, sundays, workCounts, assignments) {
-    // Scarcity: prefer people who have fewer eligible weeks left in the month
-    // Also use position.priority_list if available
-    // Lower scarcity score = more scarce = higher priority
-    return candidates
+function getEveryoneElseIndex(position) {
+    if (!Array.isArray(position.priority_list) || !Number.isInteger(position.everyone_else_index)) {
+        return null;
+    }
+
+    return Math.max(0, Math.min(position.everyone_else_index, position.priority_list.length));
+}
+
+function getPriorityScore(personId, position) {
+    let priorityScore = position.priority_list ? position.priority_list.indexOf(personId) : 9999;
+    if (priorityScore === -1) priorityScore = 9999;
+    return priorityScore;
+}
+
+function summarizeAssignments(dayAssignments, peopleById, positionsById) {
+    return Object.entries(dayAssignments)
+        .map(([positionId, personId]) => ({
+            positionId: Number(positionId),
+            positionName: positionsById.get(Number(positionId))?.name || String(positionId),
+            personId,
+            personName: peopleById.get(personId)?.name || String(personId),
+        }))
+        .sort((left, right) => left.positionId - right.positionId);
+}
+
+function emitTrace(trace, event, payload) {
+    if (!trace) return;
+    trace({ event, ...payload });
+}
+
+function narrowCandidatesByEveryoneElseTier(candidates, position) {
+    const everyoneElseIndex = getEveryoneElseIndex(position);
+    if (everyoneElseIndex === null) {
+        return { tierCandidates: candidates, tierName: 'no-divider' };
+    }
+
+    const aboveIds = new Set(position.priority_list.slice(0, everyoneElseIndex));
+    const belowIds = new Set(position.priority_list.slice(everyoneElseIndex));
+
+    const aboveEveryoneElse = candidates.filter((candidate) => aboveIds.has(candidate.id));
+    if (aboveEveryoneElse.length > 0) {
+        return { tierCandidates: aboveEveryoneElse, tierName: 'above-everyone-else' };
+    }
+
+    const everyoneElse = candidates.filter((candidate) => !aboveIds.has(candidate.id) && !belowIds.has(candidate.id));
+    if (everyoneElse.length > 0) {
+        return { tierCandidates: everyoneElse, tierName: 'everyone-else' };
+    }
+
+    const belowEveryoneElse = candidates.filter((candidate) => belowIds.has(candidate.id));
+    if (belowEveryoneElse.length > 0) {
+        return { tierCandidates: belowEveryoneElse, tierName: 'below-everyone-else' };
+    }
+
+    return { tierCandidates: candidates, tierName: 'fallback-all' };
+}
+
+function getEveryoneElseTier(personId, position) {
+    const everyoneElseIndex = getEveryoneElseIndex(position);
+    if (everyoneElseIndex === null) {
+        return 'no-divider';
+    }
+
+    const priorityIndex = position.priority_list.indexOf(personId);
+    if (priorityIndex === -1) {
+        return 'everyone-else';
+    }
+    if (priorityIndex < everyoneElseIndex) {
+        return 'above-everyone-else';
+    }
+    return 'below-everyone-else';
+}
+
+function selectByScarcity(candidates, position, sundays, workCounts, assignments) {
+    const { tierCandidates, tierName } = narrowCandidatesByEveryoneElseTier(candidates, position);
+
+    // Scarcity: prefer people who have fewer eligible weeks left in the month.
+    // If a position defines an Everyone Else divider, only the best available tier
+    // (above EE, then EE, then below EE) participates in scarcity scoring.
+    const scoredCandidates = tierCandidates
         .map(p => {
             // How many other Sundays this month could this person work for this position?
             const eligibleSundays = sundays.filter(sunday => {
@@ -122,24 +351,44 @@ function rankByScarcity(candidates, position, sundays, workCounts, assignments) 
             });
             // Lower = more scarce
             let scarcityScore = eligibleSundays.length;
-            // Position-specific priority list
-            let priorityScore = position.priority_list ? position.priority_list.indexOf(p.id) : 9999;
-            if (priorityScore === -1) priorityScore = 9999;
-            return { p, scarcityScore, priorityScore };
+            let priorityScore = getPriorityScore(p.id, position);
+            return {
+                id: p.id,
+                name: p.name,
+                scarcityScore,
+                priorityScore,
+                eligibleSundays,
+                tier: getEveryoneElseTier(p.id, position),
+                person: p,
+            };
         })
-        .sort((a, b) => a.scarcityScore - b.scarcityScore || a.priorityScore - b.priorityScore)[0].p;
+        .sort((a, b) => a.scarcityScore - b.scarcityScore || a.priorityScore - b.priorityScore);
+
+    return {
+        selected: scoredCandidates[0].person,
+        tierName,
+        scoredCandidates: scoredCandidates.map(({ person, ...entry }) => entry),
+    };
 }
 
-function rankByPriorityList(candidates, position) {
-    if (!position.priority_list) return candidates[0];
-    const sorted = candidates.slice().sort((a, b) => {
-        let aIdx = position.priority_list.indexOf(a.id);
-        let bIdx = position.priority_list.indexOf(b.id);
-        if (aIdx === -1) aIdx = 9999;
-        if (bIdx === -1) bIdx = 9999;
-        return aIdx - bIdx;
-    });
-    return sorted[0];
+function selectByPriorityList(candidates, position) {
+    const { tierCandidates, tierName } = narrowCandidatesByEveryoneElseTier(candidates, position);
+    const sortedCandidates = tierCandidates
+        .slice()
+        .map((person) => ({
+            id: person.id,
+            name: person.name,
+            priorityScore: getPriorityScore(person.id, position),
+            tier: getEveryoneElseTier(person.id, position),
+            person,
+        }))
+        .sort((a, b) => a.priorityScore - b.priorityScore);
+
+    return {
+        selected: sortedCandidates[0]?.person,
+        tierName,
+        sortedCandidates: sortedCandidates.map(({ person, ...entry }) => entry),
+    };
 }
 
 module.exports = { prePopulateMonth };

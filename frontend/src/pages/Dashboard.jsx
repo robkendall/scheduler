@@ -4,6 +4,7 @@ import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
+import ListSubheader from "@mui/material/ListSubheader";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import TextField from "@mui/material/TextField";
@@ -39,6 +40,84 @@ function shiftMonthValue(monthValue, delta) {
     const [year, monthPart] = monthValue.split("-").map(Number);
     const next = new Date(year, monthPart - 1 + delta, 1);
     return `${next.getFullYear()}-${String(next.getMonth() + 1).padStart(2, "0")}`;
+}
+
+function getGroupedPeopleForPosition(people, positionIdsByPerson, positionId) {
+    const sortedPeople = [...people].sort((left, right) => left.name.localeCompare(right.name));
+    if (!positionId) {
+        return { possible: sortedPeople, other: [] };
+    }
+
+    const possible = [];
+    const other = [];
+
+    for (const person of sortedPeople) {
+        const capablePositionIds = positionIdsByPerson.get(person.id);
+        if (capablePositionIds?.has(positionId)) {
+            possible.push(person);
+        } else {
+            other.push(person);
+        }
+    }
+
+    return { possible, other };
+}
+
+function renderGroupedPersonMenuItems(people, positionIdsByPerson, positionId) {
+    const { possible, other } = getGroupedPeopleForPosition(people, positionIdsByPerson, positionId);
+    const items = [];
+
+    if (possible.length > 0) {
+        items.push(
+            <ListSubheader key="possible-header">Possible</ListSubheader>,
+        );
+        possible.forEach((person) => {
+            items.push(
+                <MenuItem key={person.id} value={String(person.id)}>
+                    {person.name}
+                </MenuItem>,
+            );
+        });
+    }
+
+    if (other.length > 0) {
+        if (items.length > 0) {
+            items.push(
+                <ListSubheader key="other-divider">----------------</ListSubheader>,
+            );
+        }
+        items.push(
+            <ListSubheader key="other-header">Others</ListSubheader>,
+        );
+        other.forEach((person) => {
+            items.push(
+                <MenuItem key={person.id} value={String(person.id)}>
+                    {person.name}
+                </MenuItem>,
+            );
+        });
+    }
+
+    return items;
+}
+
+function getPositionCapacity(position) {
+    if (position?.allows_multiple_assignments) {
+        return Math.max(1, Number(position.max_assignments) || 1);
+    }
+    return 1;
+}
+
+function buildPositionSlots(position, assignments) {
+    const assignmentCount = assignments.length;
+    const slotCount = Math.max(getPositionCapacity(position), assignmentCount, 1);
+
+    return Array.from({ length: slotCount }, (_, index) => ({
+        slotKey: `${position.id}-${index + 1}`,
+        slotLabel: slotCount > 1 ? `${position.name} [${index + 1}]` : position.name,
+        position,
+        assignment: assignments[index] || null,
+    }));
 }
 
 function Dashboard({ activeRoleId, onRoleChange, user }) {
@@ -361,20 +440,27 @@ function Dashboard({ activeRoleId, onRoleChange, user }) {
                 ) : null}
                 <Stack spacing={2}>
                     {schedule.map((row) => {
-                        const assignedPositionIds = new Set(row.assignments.map((a) => a.positionId));
                         const assignedPersonIds = new Set(row.assignments.map((a) => a.personId));
-                        const availablePositions = positions.filter((p) => !assignedPositionIds.has(p.id));
                         const addForm = getAddForm(row.id);
-                        const assignmentByPositionId = new Map(row.assignments.map((assignment) => [assignment.positionId, assignment]));
-                        const displayEntries = positionsAlphabetical.map((position) => ({
-                            position,
-                            assignment: assignmentByPositionId.get(position.id) || null,
-                        }));
+                        const assignmentsByPositionId = new Map();
+                        row.assignments.forEach((assignment) => {
+                            if (!assignmentsByPositionId.has(assignment.positionId)) {
+                                assignmentsByPositionId.set(assignment.positionId, []);
+                            }
+                            assignmentsByPositionId.get(assignment.positionId).push(assignment);
+                        });
+                        const displayEntries = positionsAlphabetical.flatMap((position) => (
+                            buildPositionSlots(position, assignmentsByPositionId.get(position.id) || [])
+                        ));
                         const openPositionIds = new Set(
                             displayEntries
                                 .filter((entry) => !entry.assignment)
                                 .map((entry) => entry.position.id),
                         );
+                        const availablePositions = positionsAlphabetical.filter((position) => {
+                            const currentAssignments = assignmentsByPositionId.get(position.id) || [];
+                            return currentAssignments.length < getPositionCapacity(position);
+                        });
                         const trackDate = String(row.track_date).slice(0, 10);
                         const availableUnassigned = people
                             .filter((person) => person.include_in_auto_schedule !== false)
@@ -436,12 +522,13 @@ function Dashboard({ activeRoleId, onRoleChange, user }) {
                                     )}
                                 </Stack>
                                 <Stack spacing={0.75}>
-                                    {displayEntries.map(({ position, assignment }) => (
-                                        <Stack key={position.id} direction="row" spacing={1} alignItems="center">
+                                    {displayEntries.map(({ slotKey, slotLabel, position, assignment }) => (
+                                        <Stack key={slotKey} direction="row" spacing={1} alignItems="center">
                                             <Stack sx={{ minWidth: 130, flexShrink: 0 }}>
-                                                <Typography variant="body2">{position.name}</Typography>
+                                                <Typography variant="body2">{slotLabel}</Typography>
                                                 <Typography variant="caption" color="text.secondary">
                                                     {position.required ? "Required" : "Optional"}
+                                                    {getPositionCapacity(position) > 1 ? ` · ${getPositionCapacity(position)} slots` : ""}
                                                 </Typography>
                                             </Stack>
                                             {assignment ? (
@@ -454,11 +541,7 @@ function Dashboard({ activeRoleId, onRoleChange, user }) {
                                                         disabled={mutating}
                                                         sx={{ minWidth: 160 }}
                                                     >
-                                                        {people.map((person) => (
-                                                            <MenuItem key={person.id} value={String(person.id)}>
-                                                                {person.name}
-                                                            </MenuItem>
-                                                        ))}
+                                                        {renderGroupedPersonMenuItems(people, positionIdsByPerson, assignment.positionId)}
                                                     </TextField>
                                                     <Button
                                                         size="small"
@@ -501,6 +584,9 @@ function Dashboard({ activeRoleId, onRoleChange, user }) {
                                                 {availablePositions.map((position) => (
                                                     <MenuItem key={position.id} value={String(position.id)}>
                                                         {position.name}
+                                                        {getPositionCapacity(position) > 1
+                                                            ? ` [${(assignmentsByPositionId.get(position.id) || []).length + 1}]`
+                                                            : ""}
                                                     </MenuItem>
                                                 ))}
                                             </TextField>
@@ -513,11 +599,11 @@ function Dashboard({ activeRoleId, onRoleChange, user }) {
                                                 disabled={mutating}
                                                 sx={{ minWidth: 160 }}
                                             >
-                                                {people.map((person) => (
-                                                    <MenuItem key={person.id} value={String(person.id)}>
-                                                        {person.name}
-                                                    </MenuItem>
-                                                ))}
+                                                {renderGroupedPersonMenuItems(
+                                                    people,
+                                                    positionIdsByPerson,
+                                                    addForm.positionId ? Number(addForm.positionId) : null,
+                                                )}
                                             </TextField>
                                             <Button
                                                 size="small"

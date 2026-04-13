@@ -1,47 +1,49 @@
+Last run: 2026-04-08T15:37:47.549Z
+
 2026-04-05:
-  R EG: Roman Hendricks
-  Keys: Shady Hannoush
-  Bass: Stephen Di Perri
-  Drums: Devin Forkel
+  R EG*: Roman Hendricks
+  Keys*: Shady Hannoush
+  Bass*: Stephen Di Perri
+  Drums*: Luke Harris
   AG1: Gary Strohschein
-  EG1: Zachary Hutchens
+  EG1*: Zachary Hutchens
   AG2: Empty
-  EG2: Empty
-  MD: Zachary Hutchens
-  Month-end eligible but unassigned: Luke Harris, Mandy Johnson, Aaron Brookins, Corey Moser, Ben Jones, Eric Domingo
+  EG2: Corey Moser
+  MD*: Zachary Hutchens
+  Month-end eligible but unassigned: Mandy Johnson, Aaron Brookins, Devin Forkel, Ben Jones, Eric Domingo
 
 2026-04-12:
-  R EG: Roman Hendricks
-  Keys: Shady Hannoush
-  Bass: Aaron Brookins
-  Drums: Luke Harris
+  R EG*: Roman Hendricks
+  Keys*: Shady Hannoush
+  Bass*: Corey Moser
+  Drums*: Luke Harris
   AG1: Gary Strohschein
-  EG1: Adam Davis
+  EG1*: Zachary Hutchens
   AG2: Empty
-  EG2: Zachary Hutchens
-  MD: Zachary Hutchens
-  Month-end eligible but unassigned: Mandy Johnson, Corey Moser, Erin Davis, Ben Jones, Eric Domingo
+  EG2: Adam Davis
+  MD*: Zachary Hutchens
+  Month-end eligible but unassigned: Mandy Johnson, Aaron Brookins, Erin Davis, Ben Jones, Eric Domingo
 
 2026-04-19:
-  R EG: Roman Hendricks
-  Keys: Shady Hannoush
-  Bass: Stephen Di Perri
-  Drums: Luke Harris
+  R EG*: Roman Hendricks
+  Keys*: Shady Hannoush
+  Bass*: Stephen Di Perri
+  Drums*: Luke Harris
   AG1: Gary Strohschein
-  EG1: Zachary Hutchens
+  EG1*: Zachary Hutchens
   AG2: Empty
   EG2: Empty
-  MD: Zachary Hutchens
+  MD*: Zachary Hutchens
   Month-end eligible but unassigned: Mandy Johnson, Erin Davis, Devin Forkel, Eric Domingo
 
 2026-04-26:
-  R EG: Roman Hendricks
-  Keys: Mandy Johnson
-  Bass: Aaron Brookins
-  Drums: Erin Davis
+  R EG*: Roman Hendricks
+  Keys*: Mandy Johnson
+  Bass*: Corey Moser
+  Drums*: Eric Domingo
   AG1: Empty
-  EG1: Adam Davis
+  EG1*: Zachary Hutchens
   AG2: Empty
-  EG2: Zachary Hutchens
-  MD: Zachary Hutchens
-  Month-end eligible but unassigned: Luke Harris, Corey Moser, Eric Domingo
+  EG2: Empty
+  MD*: Zachary Hutchens
+  Month-end eligible but unassigned: Aaron Brookins, Erin Davis

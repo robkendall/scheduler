@@ -69,6 +69,24 @@ async function initializeSchema() {
   await ensureColumn("roles", "external_source", "TEXT");
   await ensureColumn("roles", "external_role_kind", "TEXT");
   await ensureColumn("roles", "external_role_id", "TEXT");
+  await ensureColumn("roles", "apply_strategy", "TEXT NOT NULL DEFAULT 'single_apply'");
+  await ensureColumn("roles", "global_min_assignments", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn("roles", "global_max_assignments", "INTEGER NOT NULL DEFAULT 1");
+  await pool.query(`
+    UPDATE roles
+    SET apply_strategy = 'single_apply'
+    WHERE apply_strategy IS NULL;
+  `);
+  await pool.query(`
+    UPDATE roles
+    SET global_min_assignments = 1
+    WHERE global_min_assignments IS NULL;
+  `);
+  await pool.query(`
+    UPDATE roles
+    SET global_max_assignments = GREATEST(COALESCE(global_min_assignments, 1), 1)
+    WHERE global_max_assignments IS NULL OR global_max_assignments < COALESCE(global_min_assignments, 1);
+  `);
   await pool.query(`
     CREATE UNIQUE INDEX IF NOT EXISTS roles_external_mapping_idx
     ON roles(external_source, external_role_kind, external_role_id);
@@ -177,6 +195,24 @@ async function initializeSchema() {
   await ensureColumn("positions", "deleted_at", "TIMESTAMP");
   await ensureColumn("positions", "ignore_import", "BOOLEAN NOT NULL DEFAULT FALSE");
   await ensureColumn("positions", "can_double_up", "BOOLEAN NOT NULL DEFAULT FALSE");
+  await ensureColumn("positions", "allows_multiple_assignments", "BOOLEAN NOT NULL DEFAULT FALSE");
+  await ensureColumn("positions", "min_assignments", "INTEGER NOT NULL DEFAULT 1");
+  await ensureColumn("positions", "max_assignments", "INTEGER NOT NULL DEFAULT 1");
+  await pool.query(`
+    UPDATE positions
+    SET allows_multiple_assignments = FALSE
+    WHERE allows_multiple_assignments IS NULL;
+  `);
+  await pool.query(`
+    UPDATE positions
+    SET min_assignments = 1
+    WHERE min_assignments IS NULL OR min_assignments < 0;
+  `);
+  await pool.query(`
+    UPDATE positions
+    SET max_assignments = GREATEST(COALESCE(min_assignments, 1), 1)
+    WHERE max_assignments IS NULL OR max_assignments < COALESCE(min_assignments, 1);
+  `);
 
   // await pool.query(`
   //   UPDATE positions
@@ -310,6 +346,8 @@ async function initializeSchema() {
       UNIQUE (schedule_id, person_id, position_id)
     );
   `);
+
+  await pool.query(`ALTER TABLE people_schedule DROP CONSTRAINT IF EXISTS people_schedule_schedule_id_position_id_key`);
 
   await pool.query(`
     CREATE INDEX IF NOT EXISTS people_schedule_schedule_idx

@@ -4,22 +4,20 @@
       "R EG": "Roman Hendricks",
       "Keys": "Shady Hannoush",
       "Bass": "Stephen Di Perri",
-      "Drums": "Devin Forkel",
+      "Drums": "Luke Harris",
       "AG1": "Gary Strohschein",
       "EG1": "Zachary Hutchens",
       "AG2": "Empty",
-      "EG2": "Empty",
+      "EG2": "Corey Moser",
       "MD": "Zachary Hutchens"
     },
     "unfilled": [
-      "AG2",
-      "EG2"
+      "AG2"
     ],
     "month_end_eligible_unassigned": [
-      "Luke Harris",
       "Mandy Johnson",
       "Aaron Brookins",
-      "Corey Moser",
+      "Devin Forkel",
       "Ben Jones",
       "Eric Domingo"
     ],
@@ -29,12 +27,12 @@
     "assignments": {
       "R EG": "Roman Hendricks",
       "Keys": "Shady Hannoush",
-      "Bass": "Aaron Brookins",
+      "Bass": "Corey Moser",
       "Drums": "Luke Harris",
       "AG1": "Gary Strohschein",
-      "EG1": "Adam Davis",
+      "EG1": "Zachary Hutchens",
       "AG2": "Empty",
-      "EG2": "Zachary Hutchens",
+      "EG2": "Adam Davis",
       "MD": "Zachary Hutchens"
     },
     "unfilled": [
@@ -42,7 +40,7 @@
     ],
     "month_end_eligible_unassigned": [
       "Mandy Johnson",
-      "Corey Moser",
+      "Aaron Brookins",
       "Erin Davis",
       "Ben Jones",
       "Eric Domingo"
@@ -77,22 +75,22 @@
     "assignments": {
       "R EG": "Roman Hendricks",
       "Keys": "Mandy Johnson",
-      "Bass": "Aaron Brookins",
-      "Drums": "Erin Davis",
+      "Bass": "Corey Moser",
+      "Drums": "Eric Domingo",
       "AG1": "Empty",
-      "EG1": "Adam Davis",
+      "EG1": "Zachary Hutchens",
       "AG2": "Empty",
-      "EG2": "Zachary Hutchens",
+      "EG2": "Empty",
       "MD": "Zachary Hutchens"
     },
     "unfilled": [
       "AG1",
-      "AG2"
+      "AG2",
+      "EG2"
     ],
     "month_end_eligible_unassigned": [
-      "Luke Harris",
-      "Corey Moser",
-      "Eric Domingo"
+      "Aaron Brookins",
+      "Erin Davis"
     ],
     "month_end_available_no_open_fit": []
   }

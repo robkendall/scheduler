@@ -9,12 +9,17 @@ import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import Divider from "@mui/material/Divider";
 import FormControlLabel from "@mui/material/FormControlLabel";
+import IconButton from "@mui/material/IconButton";
 import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
+import CloseIcon from "@mui/icons-material/Close";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
+import KeyboardDoubleArrowDownIcon from "@mui/icons-material/KeyboardDoubleArrowDown";
+import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
 
 import {
     addPersonPosition,
@@ -62,7 +67,6 @@ function People({ activeRoleId, user }) {
 
     const [blockedInput, setBlockedInput] = useState({ startDate: "", endDate: "" });
     const [positionInput, setPositionInput] = useState("");
-    const [dragIndex, setDragIndex] = useState(null);
     const [modalOpen, setModalOpen] = useState(false);
     const activeRoleName = user?.roles?.find((role) => role.id === activeRoleId)?.name || "Role";
 
@@ -120,7 +124,6 @@ function People({ activeRoleId, user }) {
         setDraft(EMPTY_DRAFT);
         setBlockedInput({ startDate: "", endDate: "" });
         setPositionInput("");
-        setDragIndex(null);
     }
 
     function beginNewDraft() {
@@ -174,17 +177,7 @@ function People({ activeRoleId, user }) {
         setDraft(buildDraftFromPerson(personId));
         setBlockedInput({ startDate: "", endDate: "" });
         setPositionInput("");
-        setDragIndex(null);
         setModalOpen(true);
-    }
-
-    function beginEditWithData(personId, data) {
-        setIsNewDraft(false);
-        setSelectedPersonId(personId);
-        setDraft(buildDraftFromPerson(personId, data));
-        setBlockedInput({ startDate: "", endDate: "" });
-        setPositionInput("");
-        setDragIndex(null);
     }
 
     const selectedPerson = useMemo(
@@ -303,17 +296,37 @@ function People({ activeRoleId, user }) {
         }));
     }
 
-    function handlePositionDrop(dropIndex) {
-        if (dragIndex === null || dragIndex === dropIndex) {
-            setDragIndex(null);
+    function movePosition(index, delta) {
+        const next = [...draft.positionIds];
+        const targetIndex = Math.max(0, Math.min(next.length - 1, index + delta));
+        if (targetIndex === index) {
+            return;
+        }
+        const [moved] = next.splice(index, 1);
+        next.splice(targetIndex, 0, moved);
+        setDraft((prev) => ({ ...prev, positionIds: next }));
+    }
+
+    function movePositionToTop(index) {
+        if (index === 0) {
             return;
         }
 
         const next = [...draft.positionIds];
-        const [moved] = next.splice(dragIndex, 1);
-        next.splice(dropIndex, 0, moved);
+        const [moved] = next.splice(index, 1);
+        next.unshift(moved);
         setDraft((prev) => ({ ...prev, positionIds: next }));
-        setDragIndex(null);
+    }
+
+    function movePositionToBottom(index) {
+        if (index === draft.positionIds.length - 1) {
+            return;
+        }
+
+        const next = [...draft.positionIds];
+        const [moved] = next.splice(index, 1);
+        next.push(moved);
+        setDraft((prev) => ({ ...prev, positionIds: next }));
     }
 
     async function syncRelatedData(personId, existingWeeks, existingBlocked, existingPositionIds) {
@@ -397,8 +410,9 @@ function People({ activeRoleId, user }) {
                 }, activeRoleId);
 
                 await syncRelatedData(personId, existingWeeks, existingBlocked, existingPositionIds);
-                const refreshedData = await loadData();
-                beginEditWithData(personId, refreshedData);
+                await loadData();
+                resetDraft();
+                setModalOpen(false);
             }
         } catch (requestError) {
             setError(requestError.message);
@@ -524,7 +538,9 @@ function People({ activeRoleId, user }) {
                                 {draft.blockedOut.map((item) => (
                                     <Stack key={`${item.id || "draft"}-${item.startDate}-${item.endDate}`} direction="row" justifyContent="space-between" alignItems="center">
                                         <Typography>{formatDisplayDate(item.startDate)} to {formatDisplayDate(item.endDate)}</Typography>
-                                        <Button size="small" color="error" onClick={() => removeBlockedRangeFromDraft(item)}>Remove</Button>
+                                        <IconButton size="small" color="error" onClick={() => removeBlockedRangeFromDraft(item)} title="Remove">
+                                            <CloseIcon fontSize="small" />
+                                        </IconButton>
                                     </Stack>
                                 ))}
                             </Stack>
@@ -553,17 +569,13 @@ function People({ activeRoleId, user }) {
                                 </Button>
                             </Stack>
                             <Typography variant="body2" color="text.secondary">
-                                Drag to rank this person's position preference.
+                                Use the arrows to rank this person's position preference.
                             </Typography>
                             <Stack spacing={1}>
                                 {rankedPositions.length === 0 ? <Typography color="text.secondary">No positions assigned.</Typography> : null}
                                 {rankedPositions.map((position, index) => (
                                     <Box
                                         key={position.id}
-                                        draggable
-                                        onDragStart={() => setDragIndex(index)}
-                                        onDragOver={(event) => event.preventDefault()}
-                                        onDrop={() => handlePositionDrop(index)}
                                         sx={{
                                             display: "flex",
                                             alignItems: "center",
@@ -575,12 +587,25 @@ function People({ activeRoleId, user }) {
                                         }}
                                     >
                                         <Stack direction="row" spacing={1} alignItems="center">
-                                            <DragIndicatorRoundedIcon fontSize="small" color="action" />
                                             <Typography>{position.name}</Typography>
                                         </Stack>
-                                        <Button size="small" color="error" onClick={() => removePositionFromDraft(position.id)}>
-                                            Remove
-                                        </Button>
+                                        <Stack direction="row" spacing={0.5} alignItems="center">
+                                            <IconButton size="small" onClick={() => movePositionToTop(index)} disabled={index === 0} title="Move to top">
+                                                <KeyboardDoubleArrowUpIcon fontSize="small" />
+                                            </IconButton>
+                                            <IconButton size="small" onClick={() => movePosition(index, -1)} disabled={index === 0} title="Move up">
+                                                <KeyboardArrowUpIcon fontSize="small" />
+                                            </IconButton>
+                                            <IconButton size="small" onClick={() => movePosition(index, 1)} disabled={index === rankedPositions.length - 1} title="Move down">
+                                                <KeyboardArrowDownIcon fontSize="small" />
+                                            </IconButton>
+                                            <IconButton size="small" onClick={() => movePositionToBottom(index)} disabled={index === rankedPositions.length - 1} title="Move to bottom">
+                                                <KeyboardDoubleArrowDownIcon fontSize="small" />
+                                            </IconButton>
+                                            <IconButton size="small" color="error" onClick={() => removePositionFromDraft(position.id)} title="Remove">
+                                                <CloseIcon fontSize="small" />
+                                            </IconButton>
+                                        </Stack>
                                     </Box>
                                 ))}
                             </Stack>

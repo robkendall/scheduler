@@ -98,7 +98,11 @@ async function getAllPositions(roleId = 3) {
         [ids]
     )).rows;
     return posRows.map(pos => {
-        const priorityList = orderRows.filter(o => o.position_id === pos.id && o.person_id !== null).sort((a, b) => a.rank_order - b.rank_order).map(o => o.person_id);
+        const positionOrderRows = orderRows
+            .filter(o => o.position_id === pos.id)
+            .sort((a, b) => a.rank_order - b.rank_order);
+        const everyoneElseRow = positionOrderRows.find(o => o.person_id === null);
+        const priorityList = positionOrderRows.filter(o => o.person_id !== null).map(o => o.person_id);
         return {
             id: pos.id,
             name: pos.name,
@@ -106,6 +110,9 @@ async function getAllPositions(roleId = 3) {
             is_required: pos.required,
             can_be_doubled_up: pos.can_double_up,
             priority_list: priorityList.length > 0 ? priorityList : undefined,
+            everyone_else_index: everyoneElseRow
+                ? positionOrderRows.filter(o => o.person_id !== null && o.rank_order < everyoneElseRow.rank_order).length
+                : undefined,
         };
     });
 }

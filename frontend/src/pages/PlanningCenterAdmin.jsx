@@ -3,11 +3,12 @@ import Alert from "@mui/material/Alert";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
 import Chip from "@mui/material/Chip";
-import Divider from "@mui/material/Divider";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import Divider from "@mui/material/Divider";
+import MenuItem from "@mui/material/MenuItem";
 import Stack from "@mui/material/Stack";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
@@ -22,8 +23,8 @@ import {
     createRole,
     deleteRole,
     getPlanningCenterHealth,
-    getPlanningCenterTeamMembers,
     getPlanningCenterServiceTypes,
+    getPlanningCenterTeamMembers,
     getPlanningCenterTeams,
     getRoles,
     importPlanningCenterRole,
@@ -35,13 +36,27 @@ function formatImportSummary(roleName, result) {
     return `${roleName}: ${result.imported.people} people, ${result.imported.positions} positions, ${result.imported.personPositionAssignments} assignments, ${result.imported.blockedOutRanges} blocked-out ranges, ${result.imported.schedulesImported ?? 0} schedules imported, ${result.imported.scheduleAssignmentsImported ?? 0} schedule assignments imported, ${result.imported.peopleWithPcoHistory ?? 0} with PCO history, ${result.imported.pcoWeeksDiscovered ?? 0} PCO weeks discovered, ${result.imported.normalWeeksInferred ?? 0} normal weeks inferred`;
 }
 
+function createRoleDraft(role) {
+    return {
+        id: role.id,
+        name: role.name,
+        teamId: role.external_role_id || "",
+        applyStrategy: role.apply_strategy || "single_apply",
+        globalMinAssignments: String(role.global_min_assignments ?? 1),
+        globalMaxAssignments: String(role.global_max_assignments ?? 1),
+    };
+}
+
+function applyStrategyLabel(value) {
+    return value === "group_apply" ? "Group Apply" : "Single Apply";
+}
+
 function PlanningCenterAdmin() {
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
     const [roles, setRoles] = useState([]);
     const [teams, setTeams] = useState([]);
     const [serviceTypes, setServiceTypes] = useState([]);
-    const [teamIdByRole, setTeamIdByRole] = useState({});
     const [health, setHealth] = useState(null);
     const [busyKey, setBusyKey] = useState("");
     const [importSummary, setImportSummary] = useState([]);
@@ -49,16 +64,19 @@ function PlanningCenterAdmin() {
     const [selectedTeam, setSelectedTeam] = useState(null);
     const [selectedTeamMembers, setSelectedTeamMembers] = useState([]);
     const [newRoleName, setNewRoleName] = useState("");
+    const [selectedRole, setSelectedRole] = useState(null);
+    const [roleDraft, setRoleDraft] = useState(null);
     const [rolePendingDelete, setRolePendingDelete] = useState(null);
 
-    async function loadRoles() {
+    async function loadRoles(preserveSelectedRoleId = selectedRole?.id || null) {
         const roleData = await getRoles();
         setRoles(roleData);
-        setTeamIdByRole(
-            Object.fromEntries(
-                roleData.map((role) => [role.id, role.external_role_id || ""]),
-            ),
-        );
+
+        if (preserveSelectedRoleId) {
+            const nextSelectedRole = roleData.find((role) => role.id === preserveSelectedRoleId) || null;
+            setSelectedRole(nextSelectedRole);
+            setRoleDraft(nextSelectedRole ? createRoleDraft(nextSelectedRole) : null);
+        }
     }
 
     async function loadBaseData() {
@@ -82,6 +100,21 @@ function PlanningCenterAdmin() {
         () => roles.filter((role) => role.external_source === "planning_center" && role.external_role_kind === "services_team" && role.external_role_id),
         [roles],
     );
+
+    function openRole(role) {
+        setSelectedRole(role);
+        setRoleDraft(createRoleDraft(role));
+        setError("");
+    }
+
+    function closeRoleModal() {
+        if (busyKey.startsWith("save-role-") || busyKey.startsWith("import-") || busyKey.startsWith("delete-role-")) {
+            return;
+        }
+
+        setSelectedRole(null);
+        setRoleDraft(null);
+    }
 
     async function handleHealthCheck() {
         setBusyKey("health");
@@ -141,31 +174,6 @@ function PlanningCenterAdmin() {
         }
     }
 
-    async function saveRoleMapping(role) {
-        const teamId = String(teamIdByRole[role.id] || "").trim();
-        if (!teamId) {
-            setError(`Team ID is required for role ${role.name}.`);
-            return;
-        }
-
-        setBusyKey(`save-${role.id}`);
-        setError("");
-
-        try {
-            await updateRole(role.id, {
-                name: role.name,
-                externalSource: "planning_center",
-                externalRoleKind: "services_team",
-                externalRoleId: teamId,
-            });
-            await loadRoles();
-        } catch (requestError) {
-            setError(requestError.message);
-        } finally {
-            setBusyKey("");
-        }
-    }
-
     async function handleCreateRole(event) {
         event.preventDefault();
         const roleName = String(newRoleName || "").trim();
@@ -188,18 +196,49 @@ function PlanningCenterAdmin() {
         }
     }
 
-    async function confirmDeleteRole() {
-        if (!rolePendingDelete) {
+    async function saveRoleDraft() {
+        if (!selectedRole || !roleDraft) {
             return;
         }
 
-        setBusyKey(`delete-role-${rolePendingDelete.id}`);
+        const roleName = String(roleDraft.name || "").trim();
+        if (!roleName) {
+            setError("Role name is required.");
+            return;
+        }
+
+        const globalMin = Number(roleDraft.globalMinAssignments);
+        const globalMax = Number(roleDraft.globalMaxAssignments);
+        if (!Number.isInteger(globalMin) || globalMin < 0) {
+            setError("Global minimum assignments must be a non-negative integer.");
+            return;
+        }
+        if (!Number.isInteger(globalMax) || globalMax < globalMin) {
+            setError("Global maximum assignments must be greater than or equal to the global minimum.");
+            return;
+        }
+
+        const teamId = String(roleDraft.teamId || "").trim();
+
+        setBusyKey(`save-role-${selectedRole.id}`);
         setError("");
 
         try {
-            await deleteRole(rolePendingDelete.id);
-            await loadRoles();
-            setRolePendingDelete(null);
+            const payload = {
+                name: roleName,
+                applyStrategy: roleDraft.applyStrategy,
+                globalMinAssignments: globalMin,
+                globalMaxAssignments: globalMax,
+            };
+
+            if (teamId) {
+                payload.externalSource = "planning_center";
+                payload.externalRoleKind = "services_team";
+                payload.externalRoleId = teamId;
+            }
+
+            await updateRole(selectedRole.id, payload);
+            await loadRoles(selectedRole.id);
         } catch (requestError) {
             setError(requestError.message);
         } finally {
@@ -224,14 +263,44 @@ function PlanningCenterAdmin() {
         }
     }
 
+    async function handleImportSelectedRole() {
+        if (!selectedRole) {
+            return;
+        }
+
+        await importRole(selectedRole);
+    }
+
+    async function confirmDeleteRole() {
+        if (!rolePendingDelete) {
+            return;
+        }
+
+        setBusyKey(`delete-role-${rolePendingDelete.id}`);
+        setError("");
+
+        try {
+            const deletedRoleId = rolePendingDelete.id;
+            await deleteRole(deletedRoleId);
+            setRolePendingDelete(null);
+            if (selectedRole?.id === deletedRoleId) {
+                setSelectedRole(null);
+                setRoleDraft(null);
+            }
+            await loadRoles();
+        } catch (requestError) {
+            setError(requestError.message);
+        } finally {
+            setBusyKey("");
+        }
+    }
+
     async function importAllMappedRoles() {
         setBusyKey("import-all");
         setError("");
 
         try {
             for (const role of mappedRoles) {
-                // Keep imports deterministic and easy to troubleshoot.
-
                 const result = await importPlanningCenterRole(role.id);
                 setImportSummary((prev) => [
                     formatImportSummary(role.name, result),
@@ -249,7 +318,7 @@ function PlanningCenterAdmin() {
         <PageShell
             eyebrow="Admin"
             title="Admin"
-            description="Run Planning Center requests and import team data into scheduler roles."
+            description="Run Planning Center requests and manage role scheduling settings."
         >
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
             {loading ? <Typography sx={{ mb: 2 }}>Loading admin tools...</Typography> : null}
@@ -348,63 +417,39 @@ function PlanningCenterAdmin() {
                 ) : null}
             </Box>
 
-            <TableContainer className="hero-card" sx={{ mb: 2, overflowX: "auto" }}>
-                <Table size="small" aria-label="planning center role mappings">
-                    <TableHead>
-                        <TableRow>
-                            <TableCell>Role</TableCell>
-                            <TableCell>Planning Center Team ID</TableCell>
-                            <TableCell align="right">Actions</TableCell>
-                        </TableRow>
-                    </TableHead>
-                    <TableBody>
-                        {roles.map((role) => (
-                            <TableRow key={role.id} hover>
-                                <TableCell>{role.name}</TableCell>
-                                <TableCell>
-                                    <TextField
-                                        size="small"
-                                        placeholder="e.g. 12345"
-                                        value={teamIdByRole[role.id] || ""}
-                                        onChange={(event) => {
-                                            const value = event.target.value;
-                                            setTeamIdByRole((prev) => ({ ...prev, [role.id]: value }));
-                                        }}
-                                    />
-                                </TableCell>
-                                <TableCell align="right">
-                                    <Stack direction="row" spacing={1} justifyContent="flex-end">
-                                        <Button
-                                            size="small"
-                                            variant="outlined"
-                                            onClick={() => saveRoleMapping(role)}
-                                            disabled={Boolean(busyKey)}
-                                        >
-                                            {busyKey === `save-${role.id}` ? "Saving..." : "Save mapping"}
-                                        </Button>
-                                        <Button
-                                            size="small"
-                                            color="error"
-                                            onClick={() => setRolePendingDelete(role)}
-                                            disabled={Boolean(busyKey)}
-                                        >
-                                            {busyKey === `delete-role-${role.id}` ? "Deleting..." : "Delete role"}
-                                        </Button>
-                                        <Button
-                                            size="small"
-                                            variant="contained"
-                                            onClick={() => importRole(role)}
-                                            disabled={Boolean(busyKey)}
-                                        >
-                                            {busyKey === `import-${role.id}` ? "Importing..." : "Import role"}
-                                        </Button>
-                                    </Stack>
-                                </TableCell>
-                            </TableRow>
-                        ))}
-                    </TableBody>
-                </Table>
-            </TableContainer>
+            <Box className="hero-card form-stack" sx={{ mb: 2 }}>
+                <Typography variant="h5">Roles</Typography>
+                <Typography variant="body2" color="text.secondary">
+                    Click a role to edit its scheduling mode, global assignment limits, and Planning Center mapping.
+                </Typography>
+                <Stack spacing={1}>
+                    {roles.map((role) => (
+                        <Box
+                            key={role.id}
+                            onClick={() => openRole(role)}
+                            sx={{
+                                border: "1px solid rgba(15, 118, 110, 0.18)",
+                                borderRadius: 0.5,
+                                p: 1.25,
+                                backgroundColor: "rgba(255, 250, 242, 0.85)",
+                                cursor: "pointer",
+                                "&:hover": {
+                                    backgroundColor: "rgba(255, 245, 232, 0.95)",
+                                },
+                            }}
+                        >
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={1} justifyContent="space-between" alignItems={{ sm: "center" }}>
+                                <Typography sx={{ fontWeight: 600 }}>{role.name}</Typography>
+                                <Stack direction="row" spacing={1} useFlexGap flexWrap="wrap">
+                                    <Chip size="small" label={applyStrategyLabel(role.apply_strategy)} />
+                                    <Chip size="small" variant="outlined" label={`${role.global_min_assignments ?? 1}-${role.global_max_assignments ?? 1} assignments`} />
+                                    {role.external_role_id ? <Chip size="small" variant="outlined" label={`Team ${role.external_role_id}`} /> : null}
+                                </Stack>
+                            </Stack>
+                        </Box>
+                    ))}
+                </Stack>
+            </Box>
 
             <Box className="hero-card form-stack">
                 <Stack direction={{ xs: "column", sm: "row" }} justifyContent="space-between" spacing={1}>
@@ -428,6 +473,75 @@ function PlanningCenterAdmin() {
                     </Stack>
                 )}
             </Box>
+
+            <Dialog open={Boolean(selectedRole && roleDraft)} onClose={closeRoleModal} fullWidth maxWidth="sm">
+                <DialogTitle>{selectedRole ? selectedRole.name : "Role"}</DialogTitle>
+                <DialogContent dividers>
+                    {roleDraft ? (
+                        <Stack spacing={2} sx={{ pt: 0.5 }}>
+                            <TextField
+                                label="Role name"
+                                value={roleDraft.name}
+                                onChange={(event) => setRoleDraft((prev) => ({ ...prev, name: event.target.value }))}
+                                fullWidth
+                            />
+                            <TextField
+                                select
+                                label="Scheduling mode"
+                                value={roleDraft.applyStrategy}
+                                onChange={(event) => setRoleDraft((prev) => ({ ...prev, applyStrategy: event.target.value }))}
+                                fullWidth
+                            >
+                                <MenuItem value="single_apply">Single Apply</MenuItem>
+                                <MenuItem value="group_apply">Group Apply</MenuItem>
+                            </TextField>
+                            <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                                <TextField
+                                    label="Global minimum assignments"
+                                    type="number"
+                                    value={roleDraft.globalMinAssignments}
+                                    onChange={(event) => setRoleDraft((prev) => ({ ...prev, globalMinAssignments: event.target.value }))}
+                                    inputProps={{ min: 0 }}
+                                    fullWidth
+                                />
+                                <TextField
+                                    label="Global maximum assignments"
+                                    type="number"
+                                    value={roleDraft.globalMaxAssignments}
+                                    onChange={(event) => setRoleDraft((prev) => ({ ...prev, globalMaxAssignments: event.target.value }))}
+                                    inputProps={{ min: Number(roleDraft.globalMinAssignments) || 0 }}
+                                    fullWidth
+                                />
+                            </Stack>
+                            <Divider />
+                            <TextField
+                                label="Planning Center Team ID"
+                                placeholder="e.g. 12345"
+                                value={roleDraft.teamId}
+                                onChange={(event) => setRoleDraft((prev) => ({ ...prev, teamId: event.target.value }))}
+                                fullWidth
+                            />
+                            <Typography variant="body2" color="text.secondary">
+                                Set a team ID if this role should import from a Planning Center services team.
+                            </Typography>
+                        </Stack>
+                    ) : null}
+                </DialogContent>
+                <DialogActions sx={{ justifyContent: "space-between", px: 3, py: 1.5 }}>
+                    <Button color="error" onClick={() => setRolePendingDelete(selectedRole)} disabled={!selectedRole || Boolean(busyKey)}>
+                        Delete role
+                    </Button>
+                    <Stack direction="row" spacing={1}>
+                        <Button variant="outlined" onClick={handleImportSelectedRole} disabled={!selectedRole || Boolean(busyKey)}>
+                            {selectedRole && busyKey === `import-${selectedRole.id}` ? "Importing..." : "Import role"}
+                        </Button>
+                        <Button onClick={closeRoleModal} disabled={Boolean(busyKey)}>Close</Button>
+                        <Button variant="contained" onClick={saveRoleDraft} disabled={!selectedRole || Boolean(busyKey)}>
+                            {selectedRole && busyKey === `save-role-${selectedRole.id}` ? "Saving..." : "Save changes"}
+                        </Button>
+                    </Stack>
+                </DialogActions>
+            </Dialog>
 
             <Dialog
                 open={teamMembersOpen}

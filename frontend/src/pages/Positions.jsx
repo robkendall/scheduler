@@ -16,7 +16,6 @@ import Stack from "@mui/material/Stack";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Typography from "@mui/material/Typography";
-import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import KeyboardDoubleArrowUpIcon from "@mui/icons-material/KeyboardDoubleArrowUp";
 import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
@@ -37,7 +36,36 @@ import PageShell from "../components/PageShell";
 
 const EVERYONE_ELSE = { personId: null, isEveryoneElse: true, name: "Everyone Else" };
 
-const EMPTY_DRAFT = { name: "", required: true, canDoubleUp: false, peopleOrder: [EVERYONE_ELSE] };
+const EMPTY_DRAFT = {
+    name: "",
+    required: true,
+    canDoubleUp: false,
+    allowsMultipleAssignments: false,
+    minAssignments: 1,
+    maxAssignments: 1,
+    peopleOrder: [EVERYONE_ELSE],
+};
+
+function normalizePositionSettings(settings) {
+    const required = Boolean(settings.required);
+    const allowsMultipleAssignments = Boolean(settings.allowsMultipleAssignments);
+    const parsedMin = Number(settings.minAssignments);
+    const parsedMax = Number(settings.maxAssignments);
+    const minAssignments = required
+        ? Math.max(1, Number.isFinite(parsedMin) ? parsedMin : 1)
+        : Math.max(0, Number.isFinite(parsedMin) ? parsedMin : 0);
+    const maxAssignments = allowsMultipleAssignments
+        ? Math.max(minAssignments, Number.isFinite(parsedMax) ? parsedMax : minAssignments)
+        : 1;
+
+    return {
+        ...settings,
+        required,
+        allowsMultipleAssignments,
+        minAssignments,
+        maxAssignments,
+    };
+}
 
 function Positions({ activeRoleId, user }) {
     const [positions, setPositions] = useState([]);
@@ -45,8 +73,6 @@ function Positions({ activeRoleId, user }) {
     const [error, setError] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
-    const [dragIndex, setDragIndex] = useState(null);
-    const [form, setForm] = useState({ name: "", required: true, canDoubleUp: false });
 
     const [modalOpen, setModalOpen] = useState(false);
     const [editingPosition, setEditingPosition] = useState(null);
@@ -90,28 +116,8 @@ function Positions({ activeRoleId, user }) {
 
     useEffect(() => { loadData(); }, [activeRoleId]);
 
-    async function handleSubmit(event) {
-        event.preventDefault();
-        setSaving(true);
-        setError("");
-        try {
-            await createPosition({ name: form.name, required: Boolean(form.required), canDoubleUp: Boolean(form.canDoubleUp) }, activeRoleId);
-            setForm({ name: "", required: true, canDoubleUp: false });
-            await loadData();
-        } catch (err) {
-            setError(err.message);
-        } finally {
-            setSaving(false);
-        }
-    }
-
-    async function handleDrop(dropIndex) {
-        if (dragIndex === null || dragIndex === dropIndex) { setDragIndex(null); return; }
-        const next = [...sortedPositions];
-        const [moved] = next.splice(dragIndex, 1);
-        next.splice(dropIndex, 0, moved);
+    async function savePositionOrder(next) {
         setPositions(next);
-        setDragIndex(null);
         try {
             await reorderPositions(next.map((p) => p.id), activeRoleId);
             await loadData();
@@ -119,6 +125,40 @@ function Positions({ activeRoleId, user }) {
             setError(err.message);
             await loadData();
         }
+    }
+
+    async function movePosition(index, delta) {
+        const targetIndex = Math.max(0, Math.min(sortedPositions.length - 1, index + delta));
+        if (targetIndex === index) {
+            return;
+        }
+
+        const next = [...sortedPositions];
+        const [moved] = next.splice(index, 1);
+        next.splice(targetIndex, 0, moved);
+        await savePositionOrder(next);
+    }
+
+    async function movePositionToTop(index) {
+        if (index === 0) {
+            return;
+        }
+
+        const next = [...sortedPositions];
+        const [moved] = next.splice(index, 1);
+        next.unshift(moved);
+        await savePositionOrder(next);
+    }
+
+    async function movePositionToBottom(index) {
+        if (index === sortedPositions.length - 1) {
+            return;
+        }
+
+        const next = [...sortedPositions];
+        const [moved] = next.splice(index, 1);
+        next.push(moved);
+        await savePositionOrder(next);
     }
 
     async function openEdit(position) {
@@ -138,7 +178,15 @@ function Positions({ activeRoleId, user }) {
                     peopleOrder.push({ ...EVERYONE_ELSE });
                 }
             }
-            setDraft({ name: position.name, required: Boolean(position.required), canDoubleUp: Boolean(position.can_double_up), peopleOrder });
+            setDraft({
+                name: position.name,
+                required: Boolean(position.required),
+                canDoubleUp: Boolean(position.can_double_up),
+                allowsMultipleAssignments: Boolean(position.allows_multiple_assignments),
+                minAssignments: Number(position.min_assignments ?? (position.required ? 1 : 0)),
+                maxAssignments: Number(position.max_assignments ?? 1),
+                peopleOrder,
+            });
             setEditingPosition(position);
             setPersonDropdownValue([]);
             setModalOpen(true);
@@ -220,12 +268,27 @@ function Positions({ activeRoleId, user }) {
         setSaving(true);
         setError("");
         try {
+            const normalized = normalizePositionSettings(draft);
             let positionId;
             if (editingPosition) {
-                await updatePosition(editingPosition.id, { name: draft.name, required: draft.required, canDoubleUp: draft.canDoubleUp }, activeRoleId);
+                await updatePosition(editingPosition.id, {
+                    name: normalized.name,
+                    required: normalized.required,
+                    canDoubleUp: normalized.canDoubleUp,
+                    allowsMultipleAssignments: normalized.allowsMultipleAssignments,
+                    minAssignments: normalized.minAssignments,
+                    maxAssignments: normalized.maxAssignments,
+                }, activeRoleId);
                 positionId = editingPosition.id;
             } else {
-                const created = await createPosition({ name: draft.name, required: draft.required, canDoubleUp: draft.canDoubleUp }, activeRoleId);
+                const created = await createPosition({
+                    name: normalized.name,
+                    required: normalized.required,
+                    canDoubleUp: normalized.canDoubleUp,
+                    allowsMultipleAssignments: normalized.allowsMultipleAssignments,
+                    minAssignments: normalized.minAssignments,
+                    maxAssignments: normalized.maxAssignments,
+                }, activeRoleId);
                 positionId = created.id;
             }
             const items = draft.peopleOrder.map((entry) => ({ personId: entry.isEveryoneElse ? null : entry.personId }));
@@ -260,30 +323,6 @@ function Positions({ activeRoleId, user }) {
             {!activeRoleId ? <Alert severity="warning" sx={{ mb: 2 }}>No role is selected for this account.</Alert> : null}
             {error ? <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert> : null}
 
-            <Box component="form" className="hero-card form-stack" onSubmit={handleSubmit} sx={{ mb: 2 }}>
-                <Typography variant="h5">Add position</Typography>
-                <Stack direction={{ xs: "column", sm: "row" }} spacing={1}>
-                    <TextField
-                        label="Position name"
-                        value={form.name}
-                        onChange={(event) => setForm((prev) => ({ ...prev, name: event.target.value }))}
-                        required
-                        fullWidth
-                    />
-                    <FormControlLabel
-                        control={<Switch checked={Boolean(form.required)} onChange={(event) => setForm((prev) => ({ ...prev, required: event.target.checked }))} />}
-                        label="Required"
-                        sx={{ alignSelf: { sm: "center" }, mx: 0.5 }}
-                    />
-                    <FormControlLabel
-                        control={<Switch checked={Boolean(form.canDoubleUp)} onChange={(event) => setForm((prev) => ({ ...prev, canDoubleUp: event.target.checked }))} />}
-                        label="Double"
-                        sx={{ alignSelf: { sm: "center" }, mx: 0.5 }}
-                    />
-                    <Button type="submit" variant="contained" disabled={saving}>{saving ? "Saving..." : "Add"}</Button>
-                </Stack>
-            </Box>
-
             {loading ? <Typography>Loading positions...</Typography> : null}
 
             <Box className="hero-card form-stack">
@@ -292,17 +331,13 @@ function Positions({ activeRoleId, user }) {
                     <Button variant="outlined" size="small" onClick={openAdd}>Add position</Button>
                 </Stack>
                 <Typography variant="body2" color="text.secondary">
-                    Drag rows to set global priority. Top is highest priority.
+                    Use the arrows to set global priority. Top is highest priority.
                 </Typography>
                 <Divider />
                 <Stack spacing={1}>
                     {sortedPositions.map((position, index) => (
                         <Box
                             key={position.id}
-                            draggable
-                            onDragStart={() => setDragIndex(index)}
-                            onDragOver={(event) => event.preventDefault()}
-                            onDrop={() => handleDrop(index)}
                             sx={{
                                 display: "flex",
                                 alignItems: "center",
@@ -314,16 +349,30 @@ function Positions({ activeRoleId, user }) {
                             }}
                         >
                             <Stack direction="row" spacing={1} alignItems="flex-start">
-                                <DragIndicatorRoundedIcon fontSize="small" color="action" sx={{ mt: 0.3 }} />
                                 <Box>
                                     <Typography>{position.name}</Typography>
                                     <Stack direction="row" spacing={1}>
                                         {position.required ? <Typography variant="caption" color="text.secondary">Required</Typography> : null}
                                         {position.can_double_up ? <Typography variant="caption" color="text.secondary">Double</Typography> : null}
+                                        {position.allows_multiple_assignments ? <Typography variant="caption" color="text.secondary">{position.min_assignments}-{position.max_assignments} people</Typography> : null}
                                     </Stack>
                                 </Box>
                             </Stack>
-                            <Button size="small" variant="outlined" onClick={() => openEdit(position)}>Edit</Button>
+                            <Stack direction="row" spacing={0.5} alignItems="center">
+                                <IconButton size="small" onClick={() => movePositionToTop(index)} disabled={index === 0} title="Move to top">
+                                    <KeyboardDoubleArrowUpIcon fontSize="small" />
+                                </IconButton>
+                                <IconButton size="small" onClick={() => movePosition(index, -1)} disabled={index === 0} title="Move up">
+                                    <KeyboardArrowUpIcon fontSize="small" />
+                                </IconButton>
+                                <IconButton size="small" onClick={() => movePosition(index, 1)} disabled={index === sortedPositions.length - 1} title="Move down">
+                                    <KeyboardArrowDownIcon fontSize="small" />
+                                </IconButton>
+                                <IconButton size="small" onClick={() => movePositionToBottom(index)} disabled={index === sortedPositions.length - 1} title="Move to bottom">
+                                    <KeyboardDoubleArrowDownIcon fontSize="small" />
+                                </IconButton>
+                                <Button size="small" variant="outlined" onClick={() => openEdit(position)}>Edit</Button>
+                            </Stack>
                         </Box>
                     ))}
                 </Stack>
@@ -415,12 +464,36 @@ function Positions({ activeRoleId, user }) {
 
                         <Stack direction="row" spacing={2}>
                             <FormControlLabel
-                                control={<Switch checked={Boolean(draft.required)} onChange={(event) => setDraft((prev) => ({ ...prev, required: event.target.checked }))} />}
+                                control={<Switch checked={Boolean(draft.required)} onChange={(event) => setDraft((prev) => normalizePositionSettings({ ...prev, required: event.target.checked }))} />}
                                 label="Required"
                             />
                             <FormControlLabel
                                 control={<Switch checked={Boolean(draft.canDoubleUp)} onChange={(event) => setDraft((prev) => ({ ...prev, canDoubleUp: event.target.checked }))} />}
                                 label="Double"
+                            />
+                            <FormControlLabel
+                                control={<Switch checked={Boolean(draft.allowsMultipleAssignments)} onChange={(event) => setDraft((prev) => normalizePositionSettings({ ...prev, allowsMultipleAssignments: event.target.checked }))} />}
+                                label="Group"
+                            />
+                        </Stack>
+
+                        <Stack direction={{ xs: "column", sm: "row" }} spacing={2}>
+                            <TextField
+                                label="Minimum people"
+                                type="number"
+                                value={draft.minAssignments}
+                                onChange={(event) => setDraft((prev) => normalizePositionSettings({ ...prev, minAssignments: event.target.value }))}
+                                inputProps={{ min: draft.required ? 1 : 0 }}
+                                fullWidth
+                            />
+                            <TextField
+                                label="Maximum people"
+                                type="number"
+                                value={draft.maxAssignments}
+                                onChange={(event) => setDraft((prev) => normalizePositionSettings({ ...prev, maxAssignments: event.target.value }))}
+                                inputProps={{ min: Math.max(draft.required ? 1 : 0, Number(draft.minAssignments) || 0) }}
+                                disabled={!draft.allowsMultipleAssignments}
+                                fullWidth
                             />
                         </Stack>
                     </Box>
